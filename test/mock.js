@@ -1,0 +1,179 @@
+// Minimal in-memory mock of the Apps Script services used by the Lead CRM.
+// Formulas are stored, not evaluated. Unknown chainable methods are no-ops.
+'use strict';
+const toasts = [], alerts = [], formulas = [], triggers = [];
+let tempKey = 'TK1', activeEmail = 'admin@example.com';
+
+function chain(log) {
+  const p = new Proxy(function () {}, {
+    get(t, k) { if (k === 'then') return undefined; return (...a) => { if (log) log(k, a); return p; }; },
+    apply() { return p; }
+  });
+  return p;
+}
+
+function parseA1(a1) {
+  a1 = a1.replace(/\$/g, '');
+  const m = /^([A-Z]+)?(\d+)?(?::([A-Z]+)?(\d+)?)?$/.exec(a1);
+  if (!m) throw new Error('bad A1 ' + a1);
+  const col = s => s.split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+  return { c1: m[1] ? col(m[1]) : 1, r1: m[2] ? +m[2] : 1, c2: m[3] ? col(m[3]) : (m[1] && !m[2] && !m[3] ? col(m[1]) : null), r2: m[4] ? +m[4] : null, hasEnd: !!(m[3] || m[4]) };
+}
+function letter(n) { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+
+class Sheet {
+  constructor(ss, name) { this.ss = ss; this.name = name; this.maxRows = 1000; this.maxCols = 26; this.v = {}; this.f = {}; this.dv = {}; this.charts = []; this.filter = null; this.prot = []; }
+  key(r, c) { return r + ':' + c; }
+  getName() { return this.name; }
+  getParent() { return this.ss; }
+  getMaxRows() { return this.maxRows; }
+  getMaxColumns() { return this.maxCols; }
+  insertRowsAfter(after, n) { this.maxRows += n; }
+  insertColumnsAfter(after, n) { this.maxCols += n; }
+  getLastRow() { let m = 0; for (const k in this.v) if (this.v[k] !== '' && this.v[k] != null) m = Math.max(m, +k.split(':')[0]); for (const k in this.f) m = Math.max(m, +k.split(':')[0]); return m; }
+  getLastColumn() { let m = 0; for (const k in this.v) if (this.v[k] !== '') m = Math.max(m, +k.split(':')[1]); return m; }
+  getRange(a, b, c, d) {
+    if (typeof a === 'string') {
+      const p = parseA1(a);
+      const r2 = p.hasEnd ? (p.r2 || this.maxRows) : p.r1;
+      const c2 = p.hasEnd ? (p.c2 || this.maxCols) : p.c1;
+      return new Range(this, p.r1, p.c1, r2 - p.r1 + 1, c2 - p.c1 + 1);
+    }
+    return new Range(this, a, b, c || 1, d || 1);
+  }
+  getDataRange() { return this.getRange(1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn())); }
+  getFilter() { return this.filter; }
+  getCharts() { return this.charts.slice(); }
+  removeChart(c) { this.charts = this.charts.filter(x => x !== c); }
+  newChart() { const sh = this; const b = chain(); return new Proxy({}, { get(t, k) { if (k === 'build') return () => ({ chart: true }); return (...a) => this.proxyRef; }, set() { return true; } }) && (function () { const o = {}; const p = new Proxy(o, { get(t, k) { if (k === 'build') return () => ({ chart: true }); if (k === 'addRange') return (r) => { if (r.r < 1 || r.r + r.nr - 1 > sh.maxRows) throw new Error('chart range out of bounds'); return p; }; return () => p; } }); return p; })(); }
+  insertChart(c) { this.charts.push(c); }
+  getBandings() { return []; }
+  getProtections() { return this.prot.slice(); }
+  protect() { const p = new Protection(this); this.prot.push(p); return p; }
+  getSheetProtection() { return null; }
+  setConditionalFormatRules(r) { this.cf = r; }
+  clearConditionalFormatRules() { this.cf = []; }
+  clear() { this.v = {}; this.f = {}; }
+  hideColumns() {} setFrozenRows() {} setFrozenColumns() {} setColumnWidth() {} setRowHeight() {} setTabColor() {} setHiddenGridlines() {}
+  setActiveSelection() {} getActiveCell() { return this.getRange(this.ss.activeRow || 2, 1); }
+}
+class Protection {
+  constructor(sh) { this.sh = sh; this.desc = ''; this.editors = []; }
+  setDescription(d) { this.desc = d; return this; } getDescription() { return this.desc; }
+  setWarningOnly(w) { this.warn = w; return this; }
+  addEditors(e) { this.editors.push(...e.map(x => ({ getEmail: () => x }))); return this; }
+  getEditors() { return this.editors; } removeEditors(u) { this.editors = this.editors.filter(x => !u.includes(x)); return this; }
+  canDomainEdit() { return false; } setDomainEdit() { return this; } remove() { this.sh.prot = this.sh.prot.filter(p => p !== this); }
+  setUnprotectedRanges(r) { this.unprot = r; return this; }
+}
+class Range {
+  constructor(sh, r, c, nr, nc) {
+    if (r < 1 || c < 1 || nr < 1 || nc < 1) throw new Error(`invalid range ${sh.name} r${r} c${c} ${nr}x${nc}`);
+    if (r + nr - 1 > sh.maxRows || c + nc - 1 > sh.maxCols) throw new Error(`range out of bounds ${sh.name} r${r} c${c} ${nr}x${nc} (max ${sh.maxRows}x${sh.maxCols})`);
+    Object.assign(this, { sh, r, c, nr, nc });
+    const px = new Proxy(this, { get(t, k) { if (k in t) return t[k]; if (typeof k === 'symbol') return undefined; return () => px; } });
+    return px;
+  }
+  getSheet() { return this.sh; } getRow() { return this.r; } getColumn() { return this.c; }
+  getLastRow() { return this.r + this.nr - 1; } getLastColumn() { return this.c + this.nc - 1; }
+  getNumRows() { return this.nr; } getNumColumns() { return this.nc; }
+  getA1Notation() { return letter(this.c) + this.r + (this.nr > 1 || this.nc > 1 ? ':' + letter(this.c + this.nc - 1) + (this.r + this.nr - 1) : ''); }
+  getValues() { const o = []; for (let i = 0; i < this.nr; i++) { const row = []; for (let j = 0; j < this.nc; j++) { const v = this.sh.v[this.sh.key(this.r + i, this.c + j)]; row.push(v === undefined ? '' : v); } o.push(row); } return o; }
+  getDisplayValues() { return this.getValues().map(r => r.map(v => String(v))); }
+  getValue() { return this.getValues()[0][0]; }
+  setValues(vals) {
+    if (vals.length !== this.nr || vals.some(r => r.length !== this.nc)) throw new Error(`setValues dims ${vals.length}x${vals[0] && vals[0].length} vs ${this.nr}x${this.nc} at ${this.sh.name}!${this.getA1Notation()}`);
+    vals.forEach((row, i) => row.forEach((v, j) => {
+      if (v === undefined) throw new Error('undefined value at ' + this.sh.name);
+      const k = this.sh.key(this.r + i, this.c + j);
+      if (typeof v === 'string' && v.startsWith('=')) { this.sh.f[k] = v; formulas.push([this.sh.name, v]); } else delete this.sh.f[k];
+      this.sh.v[k] = v;
+    }));
+    return this;
+  }
+  setValue(v) { return this.setValues([[v]]); }
+  setFormula(f) { formulas.push([this.sh.name + '!' + this.getA1Notation(), f]); this.sh.f[this.sh.key(this.r, this.c)] = f; return this; }
+  setFormulas(fs) { if (fs.length !== this.nr) throw new Error('setFormulas dims'); fs.forEach((row, i) => row.forEach((f, j) => { formulas.push([this.sh.name, f]); this.sh.f[this.sh.key(this.r + i, this.c + j)] = f; })); return this; }
+  getFormula() { return this.sh.f[this.sh.key(this.r, this.c)] || ''; }
+  clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) { delete this.sh.v[this.sh.key(this.r + i, this.c + j)]; } return this; }
+  setDataValidation(rule) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.dv[this.sh.key(this.r + i, this.c + j)] = rule; return this; }
+  setDataValidations(rules) { if (rules.length !== this.nr) throw new Error('setDataValidations dims ' + rules.length + ' vs ' + this.nr); rules.forEach((row, i) => row.forEach((rule, j) => { this.sh.dv[this.sh.key(this.r + i, this.c + j)] = rule; })); return this; }
+  getDataValidation() { return this.sh.dv[this.sh.key(this.r, this.c)] || null; }
+  clearDataValidations() { return this; }
+  protect() { return this.sh.protect(); }
+  createFilter() { this.sh.filter = makeFilter(); return this.sh.filter; }
+  applyRowBanding() { return chain(); }
+  getNextDataCell() { // UP from bottom
+    for (let r = this.r; r >= 1; r--) { const v = this.sh.v[this.sh.key(r, this.c)]; if (v !== undefined && v !== '') return this.sh.getRange(r, this.c); }
+    return this.sh.getRange(1, this.c);
+  }
+  createTextFinder(text) {
+    const self = this; let entire = false;
+    const all = () => { const out = []; for (let i = 0; i < self.nr; i++) for (let j = 0; j < self.nc; j++) { const v = String(self.sh.v[self.sh.key(self.r + i, self.c + j)] ?? ''); if (entire ? v.toLowerCase() === text.toLowerCase() : v.toLowerCase().includes(text.toLowerCase())) out.push(self.sh.getRange(self.r + i, self.c + j)); } return out; };
+    const tf = { matchEntireCell(b) { entire = b; return tf; }, findAll: all, findNext() { return all()[0] || null; } };
+    return tf;
+  }
+}
+function makeFilter() { const crit = {}; return { getColumnFilterCriteria: c => crit[c] || null, removeColumnFilterCriteria(c) { delete crit[c]; return this; }, setColumnFilterCriteria(c, x) { crit[c] = x; return this; }, remove() {}, crit }; }
+
+class Spreadsheet {
+  constructor() { this.sheets = [new Sheet(this, 'Sheet1')]; this.named = {}; this.active = this.sheets[0]; }
+  getSheetByName(n) { return this.sheets.find(s => s.name === n) || null; }
+  getSheets() { return this.sheets.slice(); }
+  insertSheet(n, i) { const s = new Sheet(this, n); this.sheets.splice(i ?? this.sheets.length, 0, s); return s; }
+  deleteSheet(s) { this.sheets = this.sheets.filter(x => x !== s); }
+  setActiveSheet(s) { this.active = s; return s; } getActiveSheet() { return this.active; }
+  moveActiveSheet() {}
+  toast(m) { toasts.push(m); }
+  getSpreadsheetTimeZone() { return 'Asia/Kolkata'; }
+  setNamedRange(n, r) { this.named[n] = r; } getRangeByName(n) { return this.named[n] || null; }
+  getOwner() { return null; } getUrl() { return 'https://docs.google.com/x'; }
+}
+
+function builder(kind) {
+  const calls = [];
+  const p = new Proxy({}, { get(t, k) { if (k === 'build') return () => ({ kind, calls }); return (...a) => { calls.push([k, a]); return p; }; } });
+  return p;
+}
+
+function fmtDate(d, tz, fmt) {
+  const parts = {};
+  new Intl.DateTimeFormat('en-GB', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+    .formatToParts(d).forEach(p => parts[p.type] = p.value);
+  const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+parts.month - 1];
+  const local = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute, +parts.second);
+  const offMin = Math.round((local - Math.floor(d.getTime() / 1000) * 1000) / 60000);
+  const off = (offMin >= 0 ? '+' : '-') + String(Math.floor(Math.abs(offMin) / 60)).padStart(2, '0') + ':' + String(Math.abs(offMin) % 60).padStart(2, '0');
+  return fmt.replace(/'([^']*)'/g, '\u0001$1\u0001').replace(/yyyy|MMM|MM|dd|HH|mm|ss|XXX/g, t => ({ yyyy: parts.year, MMM: mon, MM: parts.month, dd: parts.day, HH: String(+parts.hour % 24).padStart(2, '0'), mm: parts.minute, ss: parts.second, XXX: offMin === 0 ? 'Z' : off })[t]).replace(/\u0001/g, '');
+}
+
+function makeGlobals(ss) {
+  const docProps = {}, scriptProps = {}, cache = {};
+  const props = store => ({ getProperty: k => (k in store ? store[k] : null), setProperty(k, v) { store[k] = String(v); return this; }, deleteProperty(k) { delete store[k]; } });
+  return {
+    console, Date, JSON, Math, Object, Array, String, Number, RegExp, Error, parseInt, parseFloat, isNaN,
+    SpreadsheetApp: {
+      getActive: () => ss, getActiveSpreadsheet: () => ss, getActiveSheet: () => ss.active, flush() {},
+      getUi: () => ({ alert: (...a) => { alerts.push(a[1] || a[0]); }, ButtonSet: {}, Button: { OK: 'OK' }, createMenu: () => chain(), showSidebar() {}, showModalDialog() {}, prompt: () => ({ getSelectedButton: () => 'OK', getResponseText: () => '' }) }),
+      newDataValidation: () => builder('dv'), newConditionalFormatRule: () => builder('cf'), newFilterCriteria: () => builder('fc'),
+      BandingTheme: {}, ProtectionType: { RANGE: 'RANGE', SHEET: 'SHEET' }, Direction: { UP: 'UP' }, BorderStyle: {}, RelativeDate: {}
+    },
+    Charts: { ChartType: { BAR: 'BAR', COLUMN: 'COLUMN', LINE: 'LINE', PIE: 'PIE' }, ChartHiddenDimensionStrategy: {} },
+    Session: { getActiveUser: () => ({ getEmail: () => activeEmail }), getEffectiveUser: () => ({ getEmail: () => 'admin@example.com' }), getTemporaryActiveUserKey: () => tempKey, getScriptTimeZone: () => 'Asia/Kolkata' },
+    PropertiesService: { getDocumentProperties: () => props(docProps), getScriptProperties: () => props(scriptProps) },
+    CacheService: { getDocumentCache: () => ({ get: k => cache[k] || null, put: (k, v) => { cache[k] = v; } }) },
+    LockService: { getDocumentLock: () => ({ tryLock: () => true, waitLock() {}, releaseLock() {} }) },
+    ScriptApp: { getProjectTriggers: () => triggers, newTrigger: h => { const p = chain(); return new Proxy({}, { get(t, k) { if (k === 'create') return () => triggers.push({ getHandlerFunction: () => h }); return () => this.self; }, }) && (function mk() { const o = new Proxy({}, { get(t, k) { if (k === 'create') return () => { triggers.push({ getHandlerFunction: () => h }); }; return () => o; } }); return o; })(); }, deleteTrigger() {} },
+    Utilities: {
+      formatDate: fmtDate,
+      computeDigest: (alg, s) => Array.from(require('crypto').createHash('md5').update(s).digest()),
+      base64Encode: a => Buffer.from(a.map(x => x & 255)).toString('base64'),
+      DigestAlgorithm: { MD5: 'MD5' }, Charset: { UTF_8: 'UTF-8' }
+    },
+    HtmlService: { createHtmlOutputFromFile: () => chain(), createHtmlOutput: () => chain() },
+    MailApp: { sendEmail() {}, getRemainingDailyQuota: () => 100 },
+    _state: { docProps, scriptProps, cache }
+  };
+}
+
+module.exports = { Spreadsheet, makeGlobals, toasts, alerts, formulas, triggers, setUser(e, k) { activeEmail = e; tempKey = k; } };

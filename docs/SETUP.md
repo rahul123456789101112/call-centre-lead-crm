@@ -1,0 +1,246 @@
+# Setup Guide: Install and Authorise the Lead CRM
+
+This builds the complete Call Centre Lead CRM inside a **blank Google Sheet** using the Apps Script files in [`/apps-script`](../apps-script). It needs no paid CRM, add-on or external API.
+
+---
+
+## 1. Install (about 10 minutes, done once by the administrator)
+
+1. Create a new, blank Google Sheet (sheets.new), for example "Lead CRM".
+   Use the Google account that will **own** the CRM, ideally a shared team account and not a caller's personal account.
+2. Set the sheet's time zone: **File → Settings → General → Time zone** (for example, *(GMT+05:30) India Standard Time*).
+   All dates, "today", overdue checks and timestamps use this time zone.
+3. Open **Extensions → Apps Script**. Rename the project to "Lead CRM".
+4. Create these files and paste in the contents from `/apps-script`. Use exactly these names; Apps Script adds `.gs` itself.
+
+   | File in repo | Create in Apps Script as |
+   |---|---|
+   | `Config.gs` | Script → `Config` |
+   | `Setup.gs` | Script → `Setup` |
+   | `Triggers.gs` | Script → `Triggers` |
+   | `FollowUp.gs` | Script → `FollowUp` |
+   | `Menu.gs` | Script → `Menu` |
+   | `FollowUpSidebar.html` | HTML → `FollowUpSidebar` (the name must match exactly) |
+
+   Delete the default `Code.gs` (or replace its contents with one of the files).
+5. **Manifest (recommended):** go to **Project Settings (⚙) → tick "Show 'appsscript.json' manifest file in editor"**. Open `appsscript.json` and replace its contents with [`apps-script/appsscript.json`](../apps-script/appsscript.json).
+   This limits the script to *the current spreadsheet only* and to the five scopes listed in §3.
+   Change `"timeZone"` to match step 2 if you are not in India.
+6. Save (Ctrl/Cmd + S).
+7. In the function dropdown at the top of the editor, choose **`setupWorkbook`** and click **Run**.
+8. Authorise when prompted (see §2). Setup takes about 1–2 minutes. It shows progress as toasts in the spreadsheet tab, then a "Lead CRM created" message.
+9. Go back to the spreadsheet and **reload the page**. A **Lead CRM** menu appears after a few seconds.
+
+> Re-running `setupWorkbook` (or **Lead CRM → Admin → Set up / repair workbook**) is safe. It keeps every lead, log entry, master row, setting and renamed custom field, and rebuilds formatting, validation, protections and the Dashboard.
+
+## 2. Authorisation
+
+The first time you run setup, Google shows **"Authorization required"**:
+
+1. Click **Review permissions** and choose your account.
+2. You may see **"Google hasn't verified this app"**. This is normal for a private script you wrote yourself. Click **Advanced → Go to Lead CRM (unsafe)**.
+3. Click **Allow**.
+
+### Callers
+
+Share the spreadsheet with each caller as **Editor**. Each caller should then, once:
+
+1. Open the sheet and choose **Lead CRM → Log Follow-Up…**.
+2. Complete the same authorisation screens.
+
+That one step also registers who they are, so later edits they make in the sheet show their name (see §5).
+
+## 3. Permissions the script uses
+
+| Scope | Why |
+|---|---|
+| `spreadsheets.currentonly` | Read/write **this** spreadsheet only (no access to your other files) |
+| `script.container.ui` | Menu, sidebar, dialogs |
+| `script.scriptapp` | Create the installable triggers (onChange, optional installable onEdit, optional reminders) |
+| `script.send_mail` | Optional daily reminder emails, which stay **off** until an admin enables them |
+| `userinfo.email` | Identify the person making a change (Last Updated By, audit trail) |
+
+The script stores no passwords or credentials. The only person-related data it adds is:
+- account emails in the log's "Updated By" column, and
+- an internal key→email mapping (Script Properties) used to identify editors.
+
+## 4. First configuration (admin)
+
+1. **Stage Master**: replace the rows marked `SAMPLE - replace with your own process` with your stages and substages. See [ADMIN.md](ADMIN.md#stages-and-substages).
+2. **Counsellor Master**: replace the three sample counsellors. Enter each person's **Google account email**; this is how the script knows who is editing.
+3. **Lists & Settings**:
+   - check the priority, outcome, source, status and activity-type lists;
+   - under *Setting / Value*, put every administrator's email in **Admin Emails** (comma separated);
+   - set **Lead ID Prefix** before you add real leads.
+4. Run **Lead CRM → Admin → Reapply protections** so the admin list takes effect.
+5. Run **Lead CRM → Admin → Run health check** and resolve anything marked `CHECK`.
+6. Delete any test leads and log rows. Optionally reset the counters (see [ADMIN.md](ADMIN.md#resetting-ids-before-go-live)).
+
+## 5. How users are identified (important)
+
+Google only shares an editor's email with a script in some situations. The CRM uses the most reliable method available and falls back in this order:
+
+| Order | Source | When it works |
+|---|---|---|
+| 1 | `Session.getActiveUser()` / `e.user` | Same Google Workspace domain as the script owner; any user inside the follow-up sidebar (they authorised it) |
+| 2 | Temporary user key → email mapping | Consumer (gmail.com) accounts and cross-domain editors. The mapping is recorded when the user opens **Log Follow-Up** or **Identify me**. Google rotates the key every 30 days, and the sidebar refreshes it automatically. |
+| 3 | Manual selection | The sidebar always asks which counsellor performed the activity; it defaults to the mapped counsellor. |
+| 4 | `Unidentified user` | Shown in Last Updated By when nothing above is available. The change is still timestamped and audited. |
+
+Email → counsellor name comes from **Counsellor Master → Email ID**, which is the administrator-controlled mapping.
+
+**Edit-trigger modes** (Lead CRM → Admin):
+- **Simple (default):** `onEdit` runs as the person editing. Identity works as described above. Nobody else needs to install anything.
+- **Installable:** `onEditInstallable` runs as the admin who enabled it. Use this only when all users are in one Google Workspace domain, where `e.user` is populated. Otherwise every edit is attributed to "Unidentified user".
+
+## 6. What setup builds
+
+### Sheets
+
+| Sheet | Purpose | Who edits |
+|---|---|---|
+| Lead Management | Working sheet, one row per lead (10,000 rows pre-formatted) | Callers |
+| Follow-Up Log | Append-only history of every activity and audited change | Script only (warning protection) |
+| Stage Master | Stages / substages / order / active flag | Admins |
+| Counsellor Master | Counsellors, emails, teams, active flag | Admins |
+| Dashboard | KPIs, reports A–G, 6 charts | Formulas (filter cells editable by all) |
+| Lists & Settings | Dropdown lists, ageing buckets, settings, auto helper lists | Admins |
+
+### Lead Management columns
+
+A–AB are exactly as specified. AC–AI are additional tracking columns.
+
+| Col | Field | Type | Notes |
+|---|---|---|---|
+| A | Lead ID | System | `LD-000001`; unique; generated when a row first gets data |
+| B | Lead Name | Caller | |
+| C | Mobile Number | Caller | Plain-text format; pattern check (warning) and duplicate check |
+| D | Email ID | Caller | Format check (warning); duplicate check |
+| E | Assigned Counsellor | Caller/Admin | Dropdown of **active** counsellors |
+| F | Lead Stage | Caller | Dropdown of **active** stages, in Stage Order |
+| G | Lead Substage | Caller | **Dependent** dropdown (see §7) |
+| H | Lead Priority | Caller | Critical / Hot / Warm / Cold |
+| I | Last Contact Date | Script/Caller | Latest Contact activity date; cannot be in the future |
+| J | Next Follow-Up Date | Caller/Script | Must be a valid date |
+| K | Last Follow-Up Outcome | Script/Caller | Dropdown from Contact Outcome list |
+| L | Follow-Up Count | Formula | Count of Contact activities in the log |
+| M | Last Updated By | System | Counsellor name / email |
+| N | Last Activity Timestamp | System | Fixed date-time value, never `NOW()` |
+| O | Lead Remarks | Caller/Script | Latest remarks |
+| P | Lead Source | Caller | Dropdown (other values allowed, flagged) |
+| Q–Z | Custom Field 1–10 | Caller | Blank and free; admins may rename headers |
+| AA | Lead Created Date | System | Fixed timestamp |
+| AB | Lead Status | Caller | Open / On Hold / Converted / Lost / Duplicate |
+| AC | Last Follow-Up Date | System | Date of latest activity logged via the form |
+| AD | Last Stage Change Date | System | Fixed timestamp |
+| AE | Lead Assigned Date | System | Fixed timestamp of latest (re)assignment |
+| AF | Previous Counsellor | System | Owner before the latest reassignment |
+| AG | Total Activities | Formula | Contact + Record Update entries |
+| AH | Data Quality Flags | Formula | Missing/invalid/duplicate contact, unassigned, stage problems, overdue, missing follow-up date |
+| AI | Audit Snapshot | System (hidden) | JSON of owner/stage/substage/status/next FU used to detect changes, including bulk pastes |
+
+**Header colours:** navy = caller fields, grey = system, green = formula, purple = custom fields.
+
+**Row colours:**
+
+| Colour | Meaning |
+|---|---|
+| Green row | Converted |
+| Grey italic row | Lost / Duplicate |
+| Red A + J | Follow-up overdue |
+| Yellow A + J | Follow-up due today |
+| Light blue J | Follow-up due within *Upcoming Follow-Up Window* days |
+| Dark red H | Critical priority |
+| Orange H | Hot priority |
+| Orange C/D | Duplicate mobile/email |
+| Red A | Duplicate Lead ID |
+
+Alternating row banding, a frozen header (and frozen ID + Name columns) and a filter are enabled.
+
+**Formulas live in the header row** (`L1`, `AG1`, `AH1` use `={"Header"; ARRAYFORMULA(...)}`), so sorting and filtering rows can never move or break them.
+
+### Follow-Up Log columns
+
+1 Activity ID · 2 Lead ID · 3 Lead Name · 4 Counsellor Name · 5 Activity Date and Time · 6 Activity Type · 7 Contact Outcome · 8 Lead Stage at Time of Activity · 9 Lead Substage at Time of Activity · 10 Next Follow-Up Date · 11 Remarks · 12 Updated By · *then audit columns* 13 Activity Category · 14 Field Changed · 15 Old Value · 16 New Value · 17 Lead Owner at Time · 18 Submission ID (hidden, duplicate protection).
+
+**Activity Category** separates the three kinds of activity:
+
+| Category | Examples | Counts as follow-up? |
+|---|---|---|
+| **Contact** | Outbound/Inbound Call, WhatsApp, Email, SMS, Meeting | Yes |
+| **Record Update** | Stage Updated, Lead Assigned, Status Updated, Follow-Up Scheduled, Other | No (counts as "worked") |
+| **System** | Lead Created, Substage Cleared, automatic status from stage, Log Edited | No |
+
+The category is stored on each row when it is written, so later changes to the activity-type list do not rewrite history.
+
+## 7. Dependent dropdown: exact implementation
+
+- **Stage (F):** data validation "list from a range" pointing at `'Lists & Settings'!R2:R`. That range is an auto-formula: active stages from Stage Master, unique, sorted by Stage Order. It updates by itself when Stage Master changes; no script is needed.
+- **Substage (G):** the script sets a **per-row** validation rule ("list of items") containing only the active substages of that row's stage:
+  - **When the stage changes** (typing, paste, or the form): that row's rule is rebuilt immediately. If the existing substage no longer belongs to the new stage, it is **cleared**. A `Substage Cleared` System entry records the old value, and the user sees a message.
+  - **When Stage Master is edited:** all rows' rules are rebuilt in one batch call (a few seconds for 10,000 rows).
+  - **After sorting / inserting / deleting rows:** the installable onChange trigger rebuilds them (throttled to once per 30 seconds). **Lead CRM → Refresh substage dropdowns** does the same on demand.
+  - **Rows without a stage**, or a stage with no substages, get a warning rule ("Select a Lead Stage first") instead of a list. Pasting still works and the script validates the result.
+  - **Safety net:** every substage change is checked against Stage Master. The Data Quality Flags column shows "Substage not valid for stage" for anything that slipped through, such as a substage later deactivated by an admin.
+
+Why not formulas or named ranges? A per-stage named-range layout breaks or shifts when stages are added, reordered or renamed. Rules generated from Stage Master avoid that and never list every substage for every stage.
+
+## 8. Dashboard
+
+The yellow cells are the controls:
+- **Reporting Period**: Today, Yesterday, Last 7 Days, Last 30 Days, Current Month, Previous Month, Custom Date Range.
+- **Custom From / To**: used only with Custom Date Range.
+- **Counsellor**: *All Counsellors* or one person, including inactive counsellors so history stays reportable.
+
+"Applied From/To" shows the dates actually used. **Last Refreshed** is written whenever a filter changes or **Lead CRM → Refresh Dashboard** runs. All numbers are live formulas.
+
+### KPI definitions
+
+| KPI | Definition | Date basis |
+|---|---|---|
+| Total Leads | Leads with a Lead ID | none |
+| Leads Created (Period) | Lead Created Date in period | creation date |
+| Leads Worked (Period) | **Unique** Lead IDs with ≥1 Contact or Record Update activity in period | activity date |
+| Unique Leads Contacted | **Unique** Lead IDs with ≥1 Contact activity in period. A lead called 5 times counts once. | activity date |
+| Follow-Ups Completed | Number of Contact activities in period | activity date |
+| Follow-Ups Pending | Open leads with Next Follow-Up Date ≥ today | as of today |
+| Follow-Ups Overdue | Open leads with Next Follow-Up Date < today | as of today |
+| Converted / Lost Leads | Lead Status = Converted / Lost | current |
+| Leads Not Contacted | Open leads with Follow-Up Count = 0 | current |
+| Leads With No Activity | Leads with no Contact or Record Update entry ever | current |
+| Conversion Rate | Converted ÷ Total Leads | current |
+
+"Open" means Lead Status is not Converted, Lost or Duplicate.
+
+The **counsellor filter** applies to:
+- the *Assigned Counsellor* for lead-based metrics;
+- the *Counsellor Name* in the log (who did the activity) for activity metrics;
+- the *Lead Owner at Time* for conversions in the daily trend.
+
+### Reports
+
+| Report | Contents |
+|---|---|
+| A. Stage-wise | Stage-level counts (25 rows) |
+| B. Substage-wise | Stage + substage pairs; each substage under its own parent (80 rows) |
+| C. Counsellor-wise | Per-counsellor performance (40 rows) |
+| F. Ageing | Open leads by age since creation, and due/overdue follow-ups by days overdue, using the buckets in Lists & Settings; plus distribution by status and by source |
+| G. Exceptions | Unassigned and unworked leads (first 25 each, with totals) |
+| D. Daily trend | One row per day of the period (up to 62 days) |
+| E. Follow-ups due/overdue | Most overdue first (up to 500) |
+
+**Charts:**
+- leads by stage
+- counsellor productivity
+- daily activity trend
+- lead distribution (status)
+- lead and follow-up ageing
+- leads by substage
+
+## 9. Optional: daily email reminders
+
+These are off by default. An admin can choose **Lead CRM → Admin → Enable daily email reminders**. Each active counsellor with an email then gets one daily list of their open leads that are due today or overdue, at the hour set in *Reminder Hour*. **Disable daily email reminders** removes the trigger.
+
+## 10. Updating the code later
+
+Paste the new file contents into the same Apps Script files. Then run **Lead CRM → Admin → Set up / repair workbook**. Your data is kept.
