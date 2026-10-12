@@ -2,39 +2,41 @@
  * CustomFields.gs
  * Optional custom fields on Lead Management (columns E:N, slots 1-10).
  *
- * The source of truth is the "Custom Fields" table in Lists & Settings (Z:AB):
- *   Slot | Field Name | Active (Yes/No)
- * Active slots are shown with their Field Name as header; inactive slots are hidden.
+ * The source of truth is the "Custom Fields" table in Lists & Settings (Z:AC):
+ *   Slot | Field Name | Active (Yes/No) | Allowed Values (comma-separated; blank = free text)
+ * Active slots are shown with their Field Name as header; inactive slots are hidden (also in Lead Entry).
+ * With Allowed Values the column becomes a dropdown that refuses anything else.
  * Columns are never inserted or deleted, only shown/hidden, so every position stays fixed and
  * hidden columns keep their data.
  */
 
-var CF_HEADERS = ['Custom Field Slot', 'Field Name', 'Active (Yes/No)'];
+var CF_HEADERS = ['Custom Field Slot', 'Field Name', 'Active (Yes/No)', 'Allowed Values (comma-separated; blank = free text)'];
 
-/** [{slot, name, active}] for slots 1-10, falling back to defaults for missing rows. */
+/** [{slot, name, active, allowed: [..]}] for slots 1-10 (memoised per execution). */
 function readCustomFields_() {
-  var sh = getSheet_(SHEET.SETTINGS);
-  var vals = sh.getRange(2, LS.CF_SLOT, CUSTOM_SLOTS, 3).getValues();
-  var out = [];
-  for (var i = 0; i < CUSTOM_SLOTS; i++) {
-    out.push({
-      slot: i + 1,
-      name: str_(vals[i][1]),
-      active: yes_(vals[i][2])
-    });
-  }
-  return out;
+  return memo_('customFields', function () {
+    var sh = getSheet_(SHEET.SETTINGS);
+    var width = sh.getMaxColumns() >= LS.CF_ALLOWED ? 4 : 3;
+    var vals = sh.getRange(2, LS.CF_SLOT, CUSTOM_SLOTS, width).getValues();
+    var out = [];
+    for (var i = 0; i < CUSTOM_SLOTS; i++) {
+      var allowed = width === 4 ? String(vals[i][3] || '').split(',').map(function (x) { return x.trim(); }).filter(String) : [];
+      out.push({ slot: i + 1, name: str_(vals[i][1]), active: yes_(vals[i][2]), allowed: allowed });
+    }
+    return out;
+  });
 }
 
 function writeCustomFields_(fields) {
   getSheet_(SHEET.SETTINGS).getRange(2, LS.CF_SLOT, CUSTOM_SLOTS, 3).setValues(fields.map(function (f) {
     return [f.slot, f.name, f.active ? 'Yes' : 'No'];
   }));
+  clearMemo_();
 }
 
 /** Creates the table (all 10 slots inactive) unless it already exists; keeps existing names/status. */
 function setupCustomFieldTable_(settingsSheet) {
-  settingsSheet.getRange(1, LS.CF_SLOT, 1, 3).setValues([CF_HEADERS]);
+  settingsSheet.getRange(1, LS.CF_SLOT, 1, 4).setValues([CF_HEADERS]);
   var cur = settingsSheet.getRange(2, LS.CF_SLOT, CUSTOM_SLOTS, 3).getValues();
   var rows = cur.map(function (r, i) {
     var exists = str_(r[0]) !== '' || str_(r[1]) !== '' || str_(r[2]) !== '';
@@ -45,12 +47,15 @@ function setupCustomFieldTable_(settingsSheet) {
     .requireValueInList(['Yes', 'No'], true).setAllowInvalid(false)
     .setHelpText('Yes = column shown on Lead Management with this name. No = column hidden (data kept).').build());
   settingsSheet.getRange(2, LS.CF_SLOT, CUSTOM_SLOTS, 1).setFontColor('#566573').setHorizontalAlignment('center');
+  settingsSheet.getRange(1, LS.CF_ALLOWED).setNote('Optional. Example: MBA, BBA, BCom. The custom column then becomes a dropdown with exactly these values. Blank = free text (up to 100 characters).');
+  clearMemo_();
   settingsSheet.getRange(1, LS.CF_SLOT).setNote('Slot N = Lead Management column ' + colLetter_(customCol_(1)) + '..' +
     colLetter_(customCol_(CUSTOM_SLOTS)) + ' (slot 1 = ' + colLetter_(customCol_(1)) + '). Use Lead CRM > Add / Remove custom field, or edit Field Name / Active here.');
 }
 
-/** Writes custom headers and shows/hides the 10 custom columns according to the table. */
+/** Writes custom headers and shows/hides the 10 custom columns according to the table (Lead Management + Lead Entry). */
 function applyCustomFields_() {
+  clearMemo_();
   var leads = getSheet_(SHEET.LEADS);
   var fields = readCustomFields_();
   leads.getRange(1, LC.CUSTOM_FIRST, 1, CUSTOM_SLOTS).setValues([fields.map(function (f) {
@@ -60,6 +65,7 @@ function applyCustomFields_() {
     if (f.active) leads.showColumns(customCol_(f.slot));
     else leads.hideColumns(customCol_(f.slot));
   });
+  applyLeadEntryCustomFields_();
   return fields;
 }
 
@@ -120,6 +126,8 @@ function addCustomField() {
     fields[slot.slot - 1].active = true;
     writeCustomFields_(fields);
     applyCustomFields_();
+    applyLockedColumns_();
+    setupLeadEntryRules_();
   } finally {
     lock.releaseLock();
   }
@@ -156,6 +164,7 @@ function removeCustomField() {
     fields[pick.slot - 1].active = false;
     writeCustomFields_(fields);
     applyCustomFields_();
+    applyLockedColumns_();
   } finally {
     lock.releaseLock();
   }
@@ -169,9 +178,11 @@ function removeCustomField() {
 /** Admin edited the Custom Fields table in Lists & Settings: apply names / visibility. */
 function onCustomFieldTableEdit_(range) {
   var r1 = range.getRow(), r2 = range.getLastRow(), c1 = range.getColumn(), c2 = range.getLastColumn();
-  if (r2 < 2 || r1 > CUSTOM_SLOTS + 1 || c2 < LS.CF_SLOT || c1 > LS.CF_ACTIVE) return false;
+  if (r2 < 2 || r1 > CUSTOM_SLOTS + 1 || c2 < LS.CF_SLOT || c1 > LS.CF_ALLOWED) return false;
   applyCustomFields_();
-  toast_('Custom fields updated on Lead Management.');
+  applyLockedColumns_();
+  setupLeadEntryRules_();
+  toast_('Custom fields updated on Lead Management and Lead Entry.');
   return true;
 }
 
@@ -188,6 +199,7 @@ function onCustomHeaderEdit_(sheet, range) {
   });
   writeCustomFields_(fields);
   applyCustomFields_();   // restores a header that was cleared
+  addLeadHeaderNotes_(sheet);
 }
 
 /* ================================================================== */

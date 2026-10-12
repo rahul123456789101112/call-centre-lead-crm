@@ -1,264 +1,180 @@
 # Administrator Guide
 
-Administrators are the emails listed in **Lists & Settings → Admin Emails** (plus the file owner). Only they can:
-- edit Stage Master, Counsellor Master, Lists & Settings, the Lead Management header row and the Dashboard;
-- run the **Lead CRM → Admin** menu.
+Administrators are the emails in **Lists & Settings → Admin Emails** plus the file owner. Every admin action checks this list on the server, whatever menu a person sees. After changing the list, run **Lead CRM → Admin → Reapply protections**.
 
-After changing the admin list, run **Lead CRM → Admin → Reapply protections**.
+Day-to-day routines for admins and counsellors are in [COLUMN_DICTIONARY.md → How to use the CRM day to day](COLUMN_DICTIONARY.md#how-to-use-the-crm-day-to-day). Every column is explained in the same document.
 
-> **Golden rule:** never insert, delete or move columns in Lead Management (A–AI) or Follow-Up Log (A–R). The script finds fields by position. For extra information, use the 10 optional custom fields; they are switched on and off by hiding/showing fixed columns E–N.
+> **Golden rule:** never insert, delete or move columns in Lead Management (A–AI) or Follow-Up Log (A–R). An empty inserted column is removed automatically; anything else pauses the CRM until you press **Undo** (Ctrl+Z) and run **Admin → Re-check all lead rows**.
+
+---
+
+## The Lead CRM menu
+
+| Item | Who | What it does |
+|---|---|---|
+| Log follow-up | Everyone | The follow-up form for the selected lead |
+| My overdue follow-ups | Everyone | Your incomplete leads, then follow-ups due today / overdue |
+| Refresh dashboard | Everyone | Admins: at once. Counsellors: done by the owner's trigger within a minute |
+| Add leads from Lead Entry (admins) | Admins | Checks Lead Entry and creates the valid leads |
+| Help | Everyone | One-screen help |
+| **Admin ▸** Show / Hide admin sheets | Admins | Lead Entry, Follow-Up Log, masters, settings, logs, Deleted Leads |
+| Admin ▸ Delete lead(s)… / Restore deleted lead… / Purge deleted lead permanently… | Admins | See [Deleting leads](#deleting-restoring-and-purging-leads) |
+| Admin ▸ Allow system-column correction for 10 minutes | Admins | Lets admins fix an automatic column (logged) |
+| Admin ▸ Add / Remove custom field… | Admins | [Custom fields](#custom-fields-en) |
+| Admin ▸ Re-check all lead rows | Admins | Runs the edit guard over every row |
+| Admin ▸ Recalculate data-quality flags · Refresh substage dropdowns · Reapply protections | Admins | Repairs |
+| Admin ▸ Set up / repair workbook · Quick test setup · Restart setup · Extend Lead Management by 5,000 rows · Recalculate ID counters | Admins | Setup and capacity |
+| Admin ▸ Counsellor web app link · Web app sign-in setup · Set counsellor web app URL | Admins | Optional web app |
+| Admin ▸ Enable / Disable daily email reminders · Send reminders now (test) | Admins | Reminders |
+| Admin ▸ Run health check | Admins | Checks sheets, triggers, protection, layout, queue, settings |
+
+The menu is the same for everybody (Google cannot show a different menu per user); admin items refuse non-admins with "Only CRM administrators can do this."
+
+---
+
+## Adding leads (Lead Entry)
+
+New leads can **only** be added through the hidden **Lead Entry** sheet. Typing a new lead into Lead Management is undone automatically.
+
+1. **Admin → Show admin sheets**, open **Lead Entry**.
+2. Type or paste rows: Lead Name and Mobile Number are required; Email ID, the active custom fields, Assigned Counsellor, Lead Source, Lead Priority and Remarks are optional. Paste values only (Ctrl+Shift+V) if you copy from another file; the dropdowns are put back after a paste.
+3. **Lead CRM → Add leads from Lead Entry.** Every row is checked with the same rules as Lead Management:
+   - **valid rows** are created in Lead Management (Lead ID, Lead Created Date, default stage/substage/status from Lists & Settings, Lead Assigned Date if a counsellor is given, a "Lead Created" log entry) and are **cleared** from Lead Entry, leaving *Result = Created*, a message and the new Lead ID;
+   - **invalid rows stay** at the top, in red, with *Result = Error* and a plain-English **Message** such as "Mobile number must be 10 digits." Fix them and run again.
+4. Duplicates are checked against existing leads and earlier rows of the same batch, according to *Duplicate Mobile Check* / *Duplicate Email Check*: **Block** refuses the row; **Warn** creates it with a note.
+
+Thousands of rows can be added at once (one write per column block). A run stops after about 4 minutes and says how many rows were not checked yet; run it again. Lead Management grows by 5,000 rows automatically when it is full.
+
+## Assigning and reassigning
+
+Admins choose **Assigned Counsellor** (column O) in Lead Management, or give it in Lead Entry. Each change is audited (*Lead Assigned*), stamps *Lead Assigned Date* and keeps *Previous Counsellor*. To reassign many leads, filter by the old counsellor and paste the new name into the selected O cells: every row is checked and audited.
+
+## Deleting, restoring and purging leads
+
+Counsellors can never delete (the sheet protection blocks row deletion). Admins should not delete rows directly either: that is detected and logged, but the lead is lost unless you press Undo.
+
+- **Admin → Delete lead(s)…** — enter one or more Lead IDs (commas or spaces). The confirmation shows each lead (ID, name, mobile, counsellor, stage/status). A **reason is required**. Each lead is moved to the hidden **Deleted Leads** sheet with *Deleted At*, *Deleted By* and *Reason*, a **Lead Deleted** System entry is written to Follow-Up Log, and the row is removed from Lead Management. Its log history stays (shown struck through in Follow-Up Log). Deleted leads are not in any Dashboard lead count.
+- **Admin → Restore deleted lead…** — brings a lead back with its **original Lead ID** (and its snapshot), logged as **Lead Restored**.
+- **Admin → Purge deleted lead permanently…** — only for leads already in Deleted Leads. Two confirmations (Yes, then type `PURGE`). The row is removed for good and a **Lead Purged** entry is written. Follow-Up Log entries of the lead are kept.
+
+## Correcting automatic columns
+
+Automatic columns (Lead ID, Follow-Up Count, Last Updated By, Last Activity Timestamp, Lead Created Date, Last Follow-Up Date, Last Stage Change Date, Lead Assigned Date, Previous Counsellor, Total Activities, Data Quality Flags, Audit Snapshot) cannot be changed by anyone; the edit guard puts any change back and logs it.
+
+For a genuine fix: **Admin → Allow system-column correction for 10 minutes.** During those 10 minutes admins may change Last Updated By, the dates and Previous Counsellor; each change is logged as **System Field Corrected**. Lead ID, the two formula columns, Data Quality Flags and the snapshot still cannot be changed. The window is logged in Follow-Up Log and the Access Log, and closes by itself.
 
 ---
 
 ## Custom fields (E–N)
 
-Lead Management has **10 optional custom-field slots** in columns **E–N**, directly after Email ID:
-
-| Slot | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Column | E | F | G | H | I | J | K | L | M | N |
-
-Custom fields are blank, free-text and editable by callers. The script never reads, validates or reports on them; any data in them counts as lead data.
-
-**After setup all 10 slots are inactive and their columns hidden.** The settings live in **Lists & Settings → Custom Fields** (columns Z–AB):
+Lead Management has **10 optional custom-field slots** in columns E–N (Lead Entry D–M). They are set in **Lists & Settings → Custom Fields** (Z–AC):
 
 | Column | Meaning |
 |---|---|
-| Custom Field Slot | 1–10, fixed. Slot N is Lead Management column E + (N − 1). |
-| Field Name | Header shown on Lead Management |
-| Active (Yes/No) | Yes = column shown; No = column hidden (its data is kept) |
+| Custom Field Slot | 1–10, fixed. Slot N = Lead Management column E + (N − 1) |
+| Field Name | Header shown in Lead Management and Lead Entry |
+| Active (Yes/No) | Yes = shown; No = hidden (data kept) |
+| **Allowed Values** | Optional, comma separated (e.g. `MBA, BBA, BCom`). The column becomes a dropdown that refuses anything else. Blank = free text up to 100 characters. |
 
-**Columns are never inserted or deleted** for custom fields, only shown or hidden, so every other column, formula and report keeps its position.
+- **Add:** **Admin → Add custom field…**, type the name. It uses the next free slot (preferring an empty one), shows the column in Lead Management and Lead Entry, and makes it editable for counsellors when *All Custom Fields* is in Counsellor-Editable Fields.
+- **Remove:** **Admin → Remove custom field…**. The column is **hidden**, never deleted; its data is kept.
+- **Rename:** change Field Name in the table, or the header in row 1 (E1–N1).
+- Columns are never inserted or deleted, only shown or hidden.
 
-### Add a custom field
-1. **Lead CRM → Add custom field…** (admins only).
-2. Type the name, for example `Course Interested`. It must not repeat another column's name.
+## Counsellor-Editable Fields
 
-The script takes the next free slot, preferring one whose column is empty. It marks the slot Active, writes the name as the header, shows the column and selects it.
-- If every free slot still holds data from a removed field, you are warned that the old data will appear under the new name, and asked to confirm.
-- When all 10 slots are in use, you are told to remove one first.
+**Lists & Settings → Counsellor-Editable Fields** (column AE) lists the only Lead Management columns counsellors may change, and only on leads assigned to them. Default: Lead Stage, Lead Substage, Lead Priority, Next Follow-Up Date, Last Follow-Up Outcome, Lead Remarks, Lead Status, All Custom Fields.
 
-### Remove a custom field
-1. **Lead CRM → Remove custom field…**.
-2. Enter the number or name of the field from the list shown.
-
-If the column contains data, you see how many values it holds and must confirm. The column is then **hidden** and the slot marked inactive. **The data is not deleted.** It reappears if that slot is activated again: set Active = Yes in the table, or add a field when this is the only free slot.
-
-### Rename a custom field
-Either of these works; the other place updates automatically:
-- change **Field Name** in the Custom Fields table;
-- type a new header in Lead Management row 1 (E1–N1).
-
-### Other notes
-- **Editing the table directly:** setting Active to Yes/No in Lists & Settings shows/hides the column immediately (edit trigger). If something gets out of step, run **Admin → Set up / repair workbook**. It re-applies names and visibility from the table.
-- **Re-running setup** keeps every field name, Active status and all custom data.
-- **Upgrading from the original layout** (custom fields in Q–Z): the first repair run moves those columns to E–N, keeping their data. Fields with data or a renamed header become active.
-- **Hidden ≠ secure:** anyone with edit access can unhide a column (right-click → *Unhide*). Do not store sensitive data in custom fields.
-- **A dropdown for a custom field:** select the column cells from row 2 down → **Data → Data validation** → *Dropdown (from a range)*, pointing at a new list in an empty column of Lists & Settings. Setup/repair clears validation on Lead Management, so re-apply it afterwards.
-- **Show the field in reports:** add a COUNTIFS on the column to the Dashboard (admins can edit it), or build a pivot table on a new sheet with **Insert → Pivot table** using `'Lead Management'!A:AH`.
+- Allowed entries: those fields, Last Contact Date, *All Custom Fields*, or one custom field by its Field Name.
+- Contact and assignment columns (Lead Name, Mobile, Email, Assigned Counsellor, Lead Source) and automatic columns can never be added.
+- A change applies at once: white/grey colours, header notes, the open (unprotected) ranges and the web app.
 
 ---
 
 ## Stages and substages
 
-Stage Master has **one row per stage + substage pair**:
+Stage Master has **one row per stage + substage pair**: Stage ID (auto), Lead Stage, Substage (blank for a stage without substages), Stage Description, Stage Order (same number on every row of a stage), Active Status, Admin Remarks.
 
-| Column | Meaning |
-|---|---|
-| Stage ID | Auto-filled (`STG-017`) when you add a row; informational |
-| Lead Stage | Stage name as shown in the dropdown |
-| Substage | Substage name. Leave blank for a stage that has no substages. |
-| Stage Description | Free text |
-| Stage Order | Number that orders stages in dropdowns and reports. Use the same number on every row of a stage. |
-| Active Status | `Active` / `Inactive` |
-| Admin Remarks | Free text |
+- **Add a substage / stage:** add a row with the stage spelling, substage, order and `Active`. All Substage dropdowns are rebuilt automatically.
+- **Deactivate:** set the row(s) to `Inactive`. It disappears from new choices; leads that already use it keep it (an inactive value may stay, but cannot be newly chosen).
+- **Rename:** add the new name as a new row, move leads across, set the old row Inactive. Log history keeps the old text.
+- **Converted / Lost stage** (Lists & Settings): Lead Status *Converted* is only allowed in the *Converted Stage* and *Lost* only in the *Lost Stage*. Moving a lead into those stages sets the status; moving it out sets the default status again (with *Auto-Set Status From Stage* = Yes). Give the Lost stage substages for the lost reasons: with *Require Substage* = Yes a Lost lead without a reason is Incomplete.
 
-**Add a substage to an existing stage:** add a row with the same Lead Stage spelling, the new Substage, the stage's order and `Active`.
-
-**Add a new stage:** add one row per substage, with a new order number (decimals such as `3.5` are fine to slot it between stages).
-
-**What happens automatically:**
-- the Stage dropdown (Lead Management F) updates through the helper list `'Lists & Settings'!R:R`;
-- every row's Substage dropdown is rebuilt (you see a toast "substage dropdowns refreshed");
-- the Dashboard stage and substage reports pick up the new rows (up to 25 stages and 80 pairs);
-- the dashboard chart ranges are resized.
-
-**Deactivate:**
-- *A substage:* set its row to `Inactive`. It disappears from new selections. Leads that already use it keep the value. The cell shows a validation warning and Data Quality Flags says "Substage not valid for stage" so you can clean them up.
-- *A whole stage:* set **all** its rows to `Inactive`.
-
-**Rename a stage or substage:** existing leads and log history keep the old text.
-1. Add the new name as a new row.
-2. Use **filter → change** on Lead Management to move leads across. Each change is audited.
-3. Set the old row to `Inactive`.
-
-Avoid renaming in place: historical log entries are text and stay unchanged, so reports split between the old and new names.
-
-**Converted / Lost stage link:** in Lists & Settings, *Converted Stage* and *Lost Stage* name the stages that automatically set Lead Status to Converted / Lost, when *Auto-Set Status From Stage* = Yes. Update them if you rename those stages.
-
-**Replacing the sample process before go-live:** delete rows 2+ of Stage Master and type your own. Also update *Default Lead Stage* / *Default Lead Substage* in Lists & Settings (or blank them).
-
-> If Stage Master is changed by something that does not fire edit triggers (an import, another script, the API), run **Lead CRM → Refresh substage dropdowns**.
-
----
+If Stage Master is changed by an import or another script, run **Admin → Refresh substage dropdowns**.
 
 ## Counsellors
 
-Counsellor Master columns:
-- Counsellor ID (auto `CNS-004`)
-- Counsellor Name
-- **Email ID** (the person's Google account; used for identification)
-- Team Leader
-- Team Name
-- Active / Inactive Status
-- Date Added (auto)
+Counsellor Master: Counsellor ID (auto), Counsellor Name, **Email ID** (their Google account), Team Leader (text only, no extra rights), Team Name, Active / Inactive Status, Date Added (auto).
 
-**Add a counsellor:**
-1. Type the name in the next empty row. ID, `Active` and today's date are filled in automatically.
-2. Add the email of **the Google account they will sign in with**. Any provider is fine (Gmail, company email, others), as long as it is a Google account. For Gmail, dots and `+tags` don't matter.
-3. Send them the counsellor link (**Lead CRM → Open counsellor web app**). Do **not** share the spreadsheet with them.
-
-The Assigned Counsellor dropdown updates immediately; no formula change is needed.
-
-**Deactivate:** set Status to `Inactive`. Their web-app access ends at their next click: every request re-checks Counsellor Master and they get "Access denied", which is logged. They also vanish from the assignment dropdown and the follow-up form. Their history stays in the log, and they remain selectable in the Dashboard counsellor filter. Leads still assigned to them are flagged "Inactive/unknown counsellor" in column AH. Reassign them by selecting a new counsellor; each change records `Lead Assigned`, Previous Counsellor and Lead Assigned Date.
-
-**Do not rename** a counsellor who already has history; add a new row instead. Historical log entries keep the name used at the time, which is intentional.
-
-**Bulk reassignment:**
-1. Filter Lead Management by the old counsellor.
-2. Select the Assigned Counsellor cells and type or paste the new name.
-
-Every row gets its own audit entry (the old owner comes from the hidden snapshot column, so bulk edits are still traceable).
+- **Add:** type the name; ID, `Active` and today's date are filled in. Add the email of the Google account they will use. Share the spreadsheet with that account as **Editor**.
+- **Deactivate:** set `Inactive`. They disappear from the assignment dropdown; their edits are undone ("not an active counsellor or admin"); the web app refuses them. History stays. Reassign their leads.
+- **Do not rename** a counsellor with history; add a new row instead.
 
 ---
 
 ## Lists & Settings
 
-**Lists (columns A–H).** Add, remove or reorder values; dropdowns read the whole column, so nothing else needs changing.
-- *Lead Priority:* `Critical` and `Hot` have colour rules.
-- *Contact Outcome*
-- *Lead Source*
-- *Lead Status:* keep `Open`, `On Hold`, `Converted`, `Lost`, `Duplicate` with these exact spellings. Reports and colours use them. You may add more statuses; they are treated as open.
-- *Activity Type / Activity Category / Show in Follow-Up Form:*
-  - Category `Contact` counts as a follow-up and updates Last Contact Date.
-  - `Record Update` counts as "worked" but not as a follow-up.
-  - Set *Show in Follow-Up Form* = No to hide a type from callers.
-  - Keep the script's own types: Lead Created, Lead Assigned, Stage Updated, Status Updated, Follow-Up Scheduled, Substage Cleared, Log Edited.
+**Lists (A–H):** Lead Priority, Contact Outcome, Lead Source, Lead Status (keep `Open`, `On Hold`, `Converted`, `Lost`, `Duplicate` spelled exactly), Activity Type / Category / Show in Follow-Up Form. Keep the script's own activity types (Lead Created, Lead Assigned, Stage Updated, Status Updated, Follow-Up Scheduled, Substage Cleared, Log Edited, Field Updated, Sheet Update, Edit Reverted, System Field Corrected, Correction Window Opened, Lead Deleted, Lead Restored, Lead Purged).
 
-**Ageing buckets (J–L).** Label, Min Days, Max Days (blank = no upper limit). They drive Dashboard report F (up to 10 buckets).
+**Ageing buckets (J–L)** drive Dashboard report F.
 
-**Settings (N–P).** Edit only the **Value** column. Settings are found by name.
-
-**Custom Fields (Z–AB).** Slot / Field Name / Active for the optional custom fields. See [Custom fields](#custom-fields-en).
+**Settings (N–P):** edit only the **Value** column.
 
 | Setting | Effect |
 |---|---|
-| Lead ID Prefix / Digits | Format of new Lead IDs. Set before go-live; existing IDs never change. |
-| Activity ID Prefix | Format of new Activity IDs |
-| Default Lead Status / Stage / Substage | Applied to brand-new leads with those fields empty |
-| Converted Stage / Lost Stage / Auto-Set Status From Stage | Automatic status when a lead reaches those stages |
-| Duplicate Mobile Check / Duplicate Email Check | `Off`, `Warn` (allow + flag; default) or `Block` (reject when typed). Use Warn when families share a number. |
-| Mobile Number Pattern | Regular expression. Default `^\+?[0-9]{10,15}$`; for India-only 10-digit use `^[6-9][0-9]{9}$`. |
-| Upcoming Follow-Up Window (Days) | Light-blue highlight range |
-| Require Next Follow-Up For Open Leads / Require Remarks On Follow-Up | Mandatory fields in the follow-up form |
-| Max Backdate Days For Activities | How far back a caller can date an activity |
-| Email Reminders Enabled / Reminder Hour | Change through the Admin menu, which also manages the trigger |
-| Admin Emails | Administrators (comma separated, any email provider). They may use the Admin menu and the web app (all leads). Then run *Reapply protections*. |
+| Lead ID Prefix / Digits, Activity ID Prefix | Format of new IDs |
+| Default Lead Status / Stage / Substage | Given to every new lead |
+| Converted Stage / Lost Stage / Auto-Set Status From Stage | Status ↔ stage rules (above) |
+| Duplicate Mobile Check / Duplicate Email Check | `Off`, `Warn` (allow + flag) or `Block` (refuse) — Lead Entry and admin edits |
+| Mobile Number Pattern / Mobile Number Message | Pattern the mobile must match after spaces and dashes are removed (default `^[0-9]{10}$`), and the message shown when it does not |
+| Upcoming Follow-Up Window (Days) | Blue highlight |
+| Require Next Follow-Up For Open Leads | After a stage or outcome change an open lead needs a new Next Follow-Up Date (else Incomplete); the form requires it |
+| Require Substage | A substage is needed when the stage has substages |
+| Require Remarks On Follow-Up | The form requires remarks |
+| Max Next Follow-Up Days | Latest allowed next follow-up date (default 365) |
+| Max Remarks Length | Limit for Lead Remarks and form remarks (default 500) |
+| Follow-Up Form Activity Type | Activity Type logged by the form (default Outbound Call) |
+| Block Edits From Unknown Users | Yes = undo edits when the editor cannot be identified (SETUP.md §5) |
+| Email Reminders Enabled / Reminder Hour | Use the Admin menu |
+| Admin Emails | Administrators (comma separated). Then *Reapply protections* |
 
-**Counsellor-Locked Fields (AD).** One Lead Management field name per row. Counsellors cannot edit these columns.
-- In the spreadsheet: **strict** protection, light-grey header and cells.
-- In the web app: shown read-only and rejected by the server.
-- Defaults: Lead ID, Mobile Number, Email ID, Assigned Counsellor, Lead Created Date, Lead Source.
-- System and formula columns are always locked, whatever the list says.
-- A custom field can be listed by its Field Name.
-- Adding or removing a name applies immediately: protection, colours and web-app permissions. If you later rename a listed custom field, update its name here too.
-
-Columns **R–X** are automatic helper lists. Do not type there.
+Changing a setting value re-applies the Lead Management rules at once. Columns R–X are automatic helper lists.
 
 ---
 
-## Access and protection model
+## Dashboard
 
-**Recommended setup:**
-- The **owner** runs setup and deploys the web app.
-- **Admins** are the only editors of the spreadsheet.
-- **Counsellors** use only the web app (see [CONFIDENTIALITY.md](CONFIDENTIALITY.md)).
+The numbers are calculated by the script (fast sheet; refreshed on a filter change, hourly and on *Refresh dashboard*; **Last Refreshed** shows when).
+
+| KPI | Definition | Date basis |
+|---|---|---|
+| Total Leads | Leads with a Lead ID in Lead Management (deleted leads excluded) | none |
+| Leads Created (Period) | Lead Created Date in the period | creation |
+| Leads Worked (Period) | Unique leads with a Contact or Record Update entry in the period. Record Updates of leads that are **still incomplete** do not count | activity |
+| Unique Leads Contacted | Unique leads with a Contact entry in the period | activity |
+| Follow-Ups Completed | Contact entries in the period (form saves, and sheet outcome changes once the lead is complete) | activity |
+| Follow-Ups Pending / Overdue | Open leads with Next Follow-Up Date ≥ today / < today | today |
+| Converted / Lost Leads | Current status | current |
+| Leads Not Contacted | Open leads with no Contact entry ever | current |
+| Leads With No Activity | No Contact or Record Update entry ever | current |
+| Conversion Rate | Converted ÷ Total | current |
+| **Incomplete Leads** | Open leads whose Data Quality Flags start with "Incomplete" | current |
+
+Reports: **A** stage-wise, **B** substage-wise, **C** counsellor-wise (now with **Incomplete Leads** per counsellor), **F** ageing + status + source, **G** unassigned / unworked (summary also shows Incomplete), **D** daily trend, **E** follow-ups due / overdue. Six charts.
+
+## Access, protection and confidentiality
 
 | Area | Protection |
 |---|---|
-| Stage Master, Counsellor Master, Lists & Settings, Access Log, Dashboard (except its 5 filter cells), Lead Management header row | **Strict**: admins only |
-| Lead Management locked columns: all system/formula columns (A, V–X, AA, AC–AI) + *Counsellor-Locked Fields* (default also C, D, O, Z) | **Strict**: admins only. A counsellor typing there gets Google's standard "protected cell" error. Light-grey colouring marks them. |
-| Lead Management editable columns (name, custom fields, stage, substage, priority, last contact, next follow-up, outcome, remarks, status) | Not protected |
-| Follow-Up Log (whole sheet) | **Strict**: written by the script as the owner. An admin's manual edit is recorded as a `Log Edited` System entry. |
+| Lead Management | Whole sheet strict (admins); open to counsellors: the Counsellor-Editable columns of rows 2 … last lead. Plus the edit guard for everyone |
+| Lead Entry, Stage Master, Counsellor Master, Lists & Settings, Start Here, Field Guide, Deleted Leads, Access Log | Strict, admins only |
+| Follow-Up Log | Strict; written by the script. An admin's manual edit is recorded as *Log Edited* |
+| Dashboard | Strict except the four filter cells |
 
-**How the script writes to strictly protected cells:**
-- the **installable** onEdit trigger, the hourly maintenance and the **web app** all run as the owner;
-- only the tiny substage fast path runs as the editor, and it writes only the unlocked Substage column.
+Counsellors work in the spreadsheet. **Any editor can copy, download or print the whole spreadsheet**, including hidden sheets; protection and hiding do not stop that. If that is not acceptable for some people, give them only the optional web app ([CONFIDENTIALITY.md](CONFIDENTIALITY.md)).
 
-In legacy simple mode (Admin menu) the same columns fall back to warning-only protection.
+## Health check and repairs
 
-**Consequences for counsellors who still use the spreadsheet (transition):**
-- they **cannot sort** Lead Management, because sorting would move locked cells. Use **Data → Create filter view**, a personal view that may sort and filter without affecting others;
-- the shared basic filter and the *Views* menu may also be refused. Filter views avoid that.
-
-**Protected ranges are safeguards, not a security boundary.** Anyone with Editor or Viewer access can copy, download or print the whole file. That is why counsellors should use the web app, which only ever sends them their own leads. Also:
-- keep the owner account separate from day-to-day users;
-- use **File → Version history** to recover;
-- note that with a personal Gmail owner, **downloads and copies of the spreadsheet cannot be logged** (no Drive audit log). Keep the admin list small (CONFIDENTIALITY.md).
-
-Do not store passwords, ID numbers or other sensitive personal data in custom fields.
-
----
-
-## Counsellor web app and Access Log
-
-- **Link:** **Lead CRM → Open counsellor web app**.
-- **Deploying / updating:** SETUP.md §2. After code changes, deploy a **New version**.
-- **Who can get in (the only rule):** emails that are **Active** in Counsellor Master, or listed in **Admin Emails**. Any Google account and any email provider; no domain restriction. The spreadsheet owner gets in only if listed. Admins see all leads; counsellors only see leads whose Assigned Counsellor is their name.
-- **Sign-in:** counsellors use the counsellor link (the sign-in app). It proves their Google email to the web app with a signed, single-use token (SETUP.md §2 and §5).
-- **Sheet editors:** each person who edits the spreadsheet should run **Lead CRM → Identify me** once. Otherwise their edits show "Unidentified user", because Google does not reveal personal accounts' emails to the owner's trigger (SETUP.md §5).
-- **Reassigning a lead** moves it to the new counsellor's web app at their next refresh.
-- **Access Log sheet** (admins only), one row per event:
-  - Portal Opened
-  - Leads Listed (filter and the Lead IDs shown)
-  - Lead Viewed
-  - Lead Updated (field: old → new)
-  - Follow-Up Logged (Activity ID)
-  - Access Denied (unknown account, inactive counsellor, or another counsellor's lead)
-  - Copy In Browser (reported, best-effort)
-  - Spreadsheet Opened (admins, by the installable onOpen trigger)
-
-  It grows with use; archive it yearly (copy rows to another file, then delete them).
-
----
-
-## Dashboard and data-quality refresh
-
-Both are calculated by the script, not by live formulas, for speed (SETUP.md §9).
-- **Dashboard:** recalculated when a yellow filter cell changes, hourly, and with **Lead CRM → Refresh Dashboard**. *Last Refreshed* shows the time.
-- **Data Quality Flags (AH):** updated for each edited row immediately, for all rows hourly, and on demand with **Admin → Recalculate data-quality flags**.
-
----
-
-## Importing or pasting many leads
-
-1. Paste the data into Lead Management. Paste values only (Ctrl+Shift+V) into the data columns (B–U, Y–Z, AB; E–N only for active custom fields). As an admin you may also paste into locked columns such as mobile, email, owner and source. Leave column A empty, or include existing unique IDs.
-2. Pastes of up to ~2,000 rows are processed automatically: IDs, created dates, defaults, dropdowns and "Lead Created" log entries.
-3. For bigger imports, or if a toast said the system was busy, run **Lead CRM → Admin → Process imported / pasted leads**. It is safe to run any time.
-
-The simple edit trigger has a 30-second limit, which is why very large pastes need step 3.
-
-**More than 10,000 leads:** use **Admin → Extend Lead Management by 5,000 rows**, which also re-applies validation, colours and protection to the new rows. The Follow-Up Log grows automatically.
-
-## Resetting IDs before go-live
-
-1. Delete the test rows from Lead Management (select rows → right-click → *Delete rows*).
-2. Delete them from Follow-Up Log too.
-3. Run **Admin → Recalculate ID counters**. The next IDs continue after the highest ID still present, or start at 000001 if the sheets are empty.
-
-## Edit trigger mode, reminders, health check
-
-- **Admin → Use installable edit trigger + strict locking:** the default; setup creates it. It must be created by the owner or an admin who can edit every protected range.
-- **Admin → Use legacy simple edit trigger:** only for setups without installable triggers. Locking becomes warning-only.
-- **Admin → Enable / Disable daily email reminders**, and **Send reminders now (test)**.
-- **Admin → Run health check:** sheets, header formulas, named ranges, triggers (edit, change, open, hourly), counters, identity, admin list, locked columns, web app URL, counsellors without emails.
+- **Run health check**: sheets, columns in order, header formula, sheet protection, triggers (edit guard, change, open, hourly, every-minute queue), queued follow-ups, correction window, hidden admin sheets, editable columns, identities, admin list, counsellors without email.
+- **Re-check all lead rows**: after Undo of a column change, after the CRM was busy, or after another tool changed the sheet.
+- **Resetting IDs before go-live:** delete test leads with *Delete lead(s)* and *Purge*, delete test rows from Follow-Up Log, then **Recalculate ID counters**.

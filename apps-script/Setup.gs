@@ -1,8 +1,8 @@
 /**
  * Setup.gs
  * setupWorkbook() builds (or repairs) the whole CRM in the current spreadsheet:
- * 6 sheets, headers, formatting, data validation, conditional formatting, protections,
- * sample master data, dashboard formulas and charts, and the core installable trigger.
+ * 11 sheets, headers, formatting, strict data validation, conditional formatting, protections,
+ * hidden admin sheets, sample master data, the dashboard and the installable triggers.
  *
  * Safe to re-run: existing leads, log entries, master data and settings are kept; only
  * structure, rules and the Dashboard are rebuilt.
@@ -53,23 +53,34 @@ var SETUP_STAGES = [
   ['Lead Management layout', function (c) { setupLeadSheetLayout_(c.ss.getSheetByName(SHEET.LEADS), c.rows); }, 40],
   ['Lead Management validation & colours', function (c) {
     applyLeadSheetRules_(c.ss.getSheetByName(SHEET.LEADS));
-    refreshAllSubstageValidations_();   // rows that already hold leads only
+    refreshDateValidations_(true);
   }, 60],
-  ['Follow-Up Log & Access Log', function (c) {
+  ['Follow-Up Log, Access Log & Deleted Leads', function (c) {
     setupLogSheet_(c.ss.getSheetByName(SHEET.LOG), c.rows);
     setupAccessLogSheet_(c.ss.getSheetByName(SHEET.ACCESS_LOG));
+    setupDeletedLeadsSheet_(c.ss.getSheetByName(SHEET.DELETED));
   }, 30],
-  ['Lead Management formulas & data quality', function (c) {
+  ['Lead rows, formulas & data quality', function (c) {
     setupLeadFormulas_(c.ss.getSheetByName(SHEET.LEADS));
+    processFollowUpQueue_();
+    upgradeLeadRows_(c.ss.getSheetByName(SHEET.LEADS), c.me);
+    refreshAllSubstageValidations_();   // rows that already hold leads only
     refreshDataQuality_();
+  }, 40],
+  ['Lead Entry, Start Here & Field Guide', function (c) {
+    setupLeadEntrySheet_(c.ss.getSheetByName(SHEET.ENTRY));
+    setupStartHere_(c.ss.getSheetByName(SHEET.START));
+    setupFieldGuide_(c.ss.getSheetByName(SHEET.GUIDE));
   }, 30],
   ['Dashboard layout', function (c) { setupDashboard_(c.ss.getSheetByName(SHEET.DASHBOARD)); }, 40],
   ['Dashboard data & charts', function (c) { refreshDashboardCharts_(); }, 40],
-  ['Protections & triggers', function (c) {
+  ['Protections, hidden sheets & triggers', function (c) {
     initCounters_();
     applyProtections_(c.ss);
     installCoreTriggers_(c.ss);
     removeDefaultSheets_(c.ss);
+    rememberLeadCount_();
+    hideAdminSheets_();
   }, 40]
 ];
 
@@ -148,16 +159,17 @@ function runSetup_(rowsOverride) {
 
   props.deleteProperty(SETUP_STATE_KEY);
   props.setProperty('CRM_VERSION', CRM_VERSION);
-  ss.setActiveSheet(ss.getSheetByName(SHEET.LEADS));
+  ss.setActiveSheet(ss.getSheetByName(SHEET.START));
   clearMemo_();
   var done = 'Lead CRM ' + (state.firstRun ? 'created' : 'repaired') + ' with ' + state.rows.toLocaleString() +
     ' lead rows.\n\n' +
     'Next steps:\n' +
     '1. Reload the spreadsheet tab to see the Lead CRM menu.\n' +
-    '2. Replace the SAMPLE rows in Stage Master and Counsellor Master with your own.\n' +
-    '3. Add each counsellor\'s Google account email in Counsellor Master (used to identify users).\n' +
-    '4. Add administrator emails in Lists & Settings > "' + SET.ADMINS + '", then run Lead CRM > Admin > Reapply protections.\n' +
-    '5. Share the spreadsheet with callers as Editors. Each caller opens Lead CRM > Log Follow-Up once to authorise.\n\n' +
+    '2. Lead CRM > Admin > Show admin sheets. Replace the SAMPLE rows in Stage Master and Counsellor Master with your own.\n' +
+    '3. Put each counsellor\'s Google account email in Counsellor Master.\n' +
+    '4. Add administrator emails in Lists & Settings > "' + SET.ADMINS + '", then Lead CRM > Admin > Reapply protections.\n' +
+    '5. Add leads in Lead Entry, then Lead CRM > Add leads from Lead Entry.\n' +
+    '6. Share the spreadsheet with counsellors as Editors. Each counsellor opens Lead CRM > My overdue follow-ups once.\n\n' +
     'See docs/SETUP.md for details.';
   notify_(done);
 }
@@ -189,6 +201,10 @@ function alert_(msg) {
 
 function ensureSheets_(ss) {
   var tabColors = {};
+  tabColors[SHEET.START] = COLORS.teal;
+  tabColors[SHEET.GUIDE] = COLORS.teal;
+  tabColors[SHEET.ENTRY] = COLORS.navy;
+  tabColors[SHEET.DELETED] = COLORS.red;
   tabColors[SHEET.LEADS] = COLORS.navy;
   tabColors[SHEET.LOG] = COLORS.teal;
   tabColors[SHEET.STAGES] = COLORS.grey;
@@ -200,6 +216,7 @@ function ensureSheets_(ss) {
   SHEET_ORDER.forEach(function (name, i) {
     var s = ss.getSheetByName(name);
     if (!s) s = ss.insertSheet(name, i);
+    if (s.isSheetHidden()) s.showSheet();
     ss.setActiveSheet(s);
     ss.moveActiveSheet(i + 1);
     s.setTabColor(tabColors[name]);
@@ -274,13 +291,21 @@ var DEFAULT_LISTS = {
     [ACT.STATUS_UPDATED, CATEGORY.RECORD, 'No'],
     [ACT.LEAD_CREATED, CATEGORY.SYSTEM, 'No'],
     [ACT.SUBSTAGE_CLEARED, CATEGORY.SYSTEM, 'No'],
-    [ACT.LOG_EDITED, CATEGORY.SYSTEM, 'No']
+    [ACT.LOG_EDITED, CATEGORY.SYSTEM, 'No'],
+    [ACT.FIELD_UPDATED, CATEGORY.RECORD, 'No'],
+    [ACT.SHEET_UPDATE, CATEGORY.CONTACT, 'No'],
+    [ACT.EDIT_REVERTED, CATEGORY.SYSTEM, 'No'],
+    [ACT.SYS_CORRECTED, CATEGORY.RECORD, 'No'],
+    [ACT.CORRECTION_OPENED, CATEGORY.SYSTEM, 'No'],
+    [ACT.LEAD_DELETED, CATEGORY.SYSTEM, 'No'],
+    [ACT.LEAD_RESTORED, CATEGORY.SYSTEM, 'No'],
+    [ACT.LEAD_PURGED, CATEGORY.SYSTEM, 'No']
   ],
   buckets: [['0-3 Days', 0, 3], ['4-7 Days', 4, 7], ['8-15 Days', 8, 15], ['16-30 Days', 16, 30], ['More Than 30 Days', 31, '']]
 };
 
 function setupSettingsSheet_(sh, me) {
-  ensureSize_(sh, 200, LS.LOCKED);
+  ensureSize_(sh, 200, LS.EDITABLE);
   var headers = {};
   headers[LS.PRIORITY] = 'Lead Priority';
   headers[LS.OUTCOME] = 'Contact Outcome';
@@ -329,6 +354,11 @@ function setupSettingsSheet_(sh, me) {
     if (missing.length) {
       writeRows_(sh, lastKeyRow + 1, LS.SET_KEY, missing.map(function (d) { return [d[0], d[1], d[2]]; }), 3);
     }
+    // Settings of features that no longer exist are removed (key, value and description).
+    keys.forEach(function (k, i) {
+      if (OBSOLETE_SETTINGS.some(function (o) { return o.toLowerCase() === k; })) sh.getRange(i + 2, LS.SET_KEY, 1, 3).clearContent();
+    });
+    upgradeActivityTypes_(sh);
   }
 
   // Setting values with fixed choices get a dropdown.
@@ -366,13 +396,14 @@ function setupSettingsSheet_(sh, me) {
   styleHeader_(sh.getRange(1, LS.SET_KEY, 1, 3), COLORS.headerCustom);
   styleHeader_(sh.getRange(1, LS.H_ACTIVE_STAGES, 1, 7), COLORS.headerSystem);
   setupCustomFieldTable_(sh);
-  setupLockedFieldList_(sh);
-  styleHeader_(sh.getRange(1, LS.CF_SLOT, 1, 3), COLORS.headerCustom);
+  setupEditableFieldList_(sh);
+  styleHeader_(sh.getRange(1, LS.CF_SLOT, 1, 4), COLORS.headerCustom);
   sh.getRange(2, LS.H_ACTIVE_STAGES, sh.getMaxRows() - 1, 7).setBackground('#F2F3F4').setFontColor('#566573');
   sh.setRowHeight(1, 40);
   sh.setColumnWidths(1, LS.CF_ACTIVE, 140);
   sh.setColumnWidth(LS.CF_SLOT - 1, 24);
   sh.setColumnWidth(LS.CF_NAME, 200);
+  sh.setColumnWidth(LS.CF_ALLOWED, 260);
   [9, 13, 17].forEach(function (c) { sh.setColumnWidth(c, 24); });
   sh.setColumnWidth(LS.SET_KEY, 260);
   sh.setColumnWidth(LS.SET_VALUE, 200);
@@ -382,25 +413,41 @@ function setupSettingsSheet_(sh, me) {
   sh.getRange(1, LS.H_ACTIVE_STAGES).setNote('Columns R:X are calculated automatically from Stage Master / Counsellor Master. Do not type here.');
 }
 
-/** Lists & Settings column AD: field names counsellors may not edit (system/formula columns are always locked). */
-function setupLockedFieldList_(sh) {
-  var head = sh.getRange(1, LS.LOCKED);
-  if (!str_(head.getValue())) {
-    head.setValue('Counsellor-Locked Fields');
-    writeList_(sh, LS.LOCKED, DEFAULT_LOCKED_FIELDS);
+/** Adds the activity types written by newer versions to an existing Activity Type list. */
+function upgradeActivityTypes_(sh) {
+  var last = Math.max(sh.getLastRow(), 2);
+  var have = sh.getRange(2, LS.ACT_TYPE, last - 1, 1).getValues().map(function (r) { return str_(r[0]).toLowerCase(); });
+  var lastRow = 1;
+  have.forEach(function (t, i) { if (t) lastRow = i + 2; });
+  var add = DEFAULT_LISTS.activityTypes.filter(function (t) { return have.indexOf(t[0].toLowerCase()) < 0; });
+  if (add.length) writeRows_(sh, lastRow + 1, LS.ACT_TYPE, add, 3);
+}
+
+/**
+ * Lists & Settings column AE: the Lead Management fields counsellors may edit (everything else is locked).
+ * Replaces the older "Counsellor-Locked Fields" list in AD, which is cleared.
+ */
+function setupEditableFieldList_(sh) {
+  var old = sh.getRange(1, LS.OLD_LOCKED);
+  if (same_(old.getValue(), 'Counsellor-Locked Fields')) {
+    sh.getRange(1, LS.OLD_LOCKED, sh.getMaxRows(), 1).clearContent().clearDataValidations();
+    old.clearNote();
   }
-  styleHeader_(head, COLORS.headerSystem);
-  sh.setColumnWidth(LS.LOCKED - 1, 24);
-  sh.setColumnWidth(LS.LOCKED, 200);
-  var editable = LEAD_HEADERS.filter(function (h, i) {
-    var c = i + 1;
-    return LEAD_SYSTEM_COLS.indexOf(c) < 0 && LEAD_FORMULA_COLS.indexOf(c) < 0;
-  }).concat(DEFAULT_LOCKED_FIELDS);
-  sh.getRange(2, LS.LOCKED, sh.getMaxRows() - 1, 1).setDataValidation(SpreadsheetApp.newDataValidation()
-    .requireValueInList(editable.filter(function (v, i) { return editable.indexOf(v) === i; }), true).setAllowInvalid(true)
-    .setHelpText('Lead Management fields counsellors cannot edit (strict protection). Custom fields may be listed by their Field Name.').build());
-  head.setNote('One field name per row. Counsellors cannot edit these columns (Google shows its standard "protected cell" message). ' +
-    'System and formula columns are always locked. Changes apply immediately (protection + grey colour).');
+  var head = sh.getRange(1, LS.EDITABLE);
+  if (!same_(head.getValue(), EDITABLE_HEADER)) {
+    head.setValue(EDITABLE_HEADER);
+    sh.getRange(2, LS.EDITABLE, sh.getMaxRows() - 1, 1).clearContent();
+    writeList_(sh, LS.EDITABLE, DEFAULT_EDITABLE_FIELDS);
+  }
+  styleHeader_(head, COLORS.teal);
+  sh.setColumnWidth(LS.OLD_LOCKED, 24);
+  sh.setColumnWidth(LS.EDITABLE, 220);
+  var choices = EDITABLE_CANDIDATE_COLS.map(function (c) { return LEAD_HEADERS[c - 1]; }).concat([ALL_CUSTOM_FIELDS]);
+  sh.getRange(2, LS.EDITABLE, sh.getMaxRows() - 1, 1).setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInList(choices, true).setAllowInvalid(true)
+    .setHelpText('Fields counsellors may change on their own leads. A single custom field may be listed by its Field Name.').build());
+  head.setNote('One field per row. Counsellors can change ONLY these columns, on their own leads (white cells). ' +
+    'Everything else is grey and locked. Contact, assignment and automatic columns can never be added. Changes apply immediately.');
 }
 
 function setupAccessLogSheet_(sh) {
@@ -517,26 +564,25 @@ function formatMasterSheet_(sh, width, widths) {
 /* Lead Management                                                     */
 /* ================================================================== */
 
-/**
- * Header colours: locked (read-only for counsellors) = light grey with dark text; editable fields keep
- * their type colour (navy caller field, purple custom field).
- */
+/** Header colours: editable = navy, admin-only = blue-grey, automatic = light grey. */
 function colourLeadHeaders_(sh) {
   var bg = [], fg = [];
   for (var c = 1; c <= LEAD_COLS; c++) {
-    if (isLockedCol_(c)) { bg.push(COLORS.lockedHeader); fg.push(COLORS.lockedHeaderFont); continue; }
-    bg.push(c >= LC.CUSTOM_FIRST && c <= LC.CUSTOM_LAST ? COLORS.headerCustom : COLORS.headerUser);
-    fg.push('#FFFFFF');
+    if (isEditableCol_(c)) { bg.push(isCustomCol_(c) ? COLORS.headerCustom : COLORS.headerUser); fg.push('#FFFFFF'); }
+    else if (isSystemCol_(c)) { bg.push(COLORS.lockedHeader); fg.push(COLORS.lockedHeaderFont); }
+    else { bg.push(COLORS.headerSystem); fg.push('#FFFFFF'); }
   }
   sh.getRange(1, 1, 1, LEAD_COLS).setBackgrounds([bg]).setFontColors([fg]);
 }
 
-/** Re-applies everything that depends on the Counsellor-Locked Fields list (colours, CF, protection). */
+/** Re-applies everything that depends on the Counsellor-Editable Fields list (colours, notes, rules, protection). */
 function applyLockedColumns_() {
   clearMemo_();
   var sh = getSheet_(SHEET.LEADS);
   colourLeadHeaders_(sh);
+  addLeadHeaderNotes_(sh);
   applyLeadSheetRules_(sh);
+  refreshDateValidations_(true);
   refreshAllSubstageValidations_();
   applyProtections_(ss_());
 }
@@ -545,13 +591,18 @@ function applyLockedColumns_() {
 function setupLeadSheetLayout_(sh, dataRows) {
   ensureSize_(sh, (dataRows || LEAD_DATA_ROWS) + 1, LEAD_COLS);
   migrateOldCustomFieldLayout_(sh);
+  // Unused columns to the right are removed (nothing can be typed there).
+  if (sh.getMaxColumns() > LEAD_COLS) {
+    if (sh.getFilter()) sh.getFilter().remove();
+    sh.deleteColumns(LEAD_COLS + 1, sh.getMaxColumns() - LEAD_COLS);
+  }
   var header = sh.getRange(1, 1, 1, LEAD_COLS);
   var existing = header.getValues()[0];
   var headers = LEAD_HEADERS.map(function (h, i) {
     var c = i + 1;
     // Custom field headers come from the Custom Fields table (applyCustomFields_ below);
     // formula headers are written in a later stage.
-    if (c >= LC.CUSTOM_FIRST && c <= LC.CUSTOM_LAST) return str_(existing[i]) || h;
+    if (isCustomCol_(c)) return str_(existing[i]) || h;
     if (LEAD_FORMULA_COLS.indexOf(c) >= 0) return existing[i] === '' ? h : existing[i];
     return h;
   });
@@ -572,18 +623,18 @@ function setupLeadSheetLayout_(sh, dataRows) {
   var col = function (c, n) { return sh.getRange(2, c, rows, n || 1); };
   col(LC.ID).setFontWeight('bold').setFontColor(COLORS.navy);
   col(LC.MOBILE).setNumberFormat('@');
-  col(LC.LAST_CONTACT, 2).setNumberFormat('dd-mmm-yyyy');                // I:J
+  col(LC.LAST_CONTACT, 2).setNumberFormat('dd-mmm-yyyy');
   col(LC.FU_COUNT).setNumberFormat('0').setHorizontalAlignment('center');
   col(LC.LAST_ACTIVITY).setNumberFormat('dd-mmm-yyyy hh:mm');
   col(LC.CREATED).setNumberFormat('dd-mmm-yyyy hh:mm');
   col(LC.LAST_FU_DATE).setNumberFormat('dd-mmm-yyyy');
-  col(LC.STAGE_CHANGED, 2).setNumberFormat('dd-mmm-yyyy hh:mm');         // AD:AE
+  col(LC.STAGE_CHANGED, 2).setNumberFormat('dd-mmm-yyyy hh:mm');
   col(LC.ACTIVITY_TOTAL).setNumberFormat('0').setHorizontalAlignment('center');
 
   sh.setColumnWidths(1, LEAD_COLS, 120);
   var widths = {};
   widths[LC.ID] = 100; widths[LC.NAME] = 170; widths[LC.EMAIL] = 190; widths[LC.OWNER] = 160;
-  widths[LC.SUBSTAGE] = 170; widths[LC.PRIORITY] = 80; widths[LC.REMARKS] = 240; widths[LC.DQ_FLAGS] = 260;
+  widths[LC.SUBSTAGE] = 170; widths[LC.PRIORITY] = 80; widths[LC.REMARKS] = 240; widths[LC.DQ_FLAGS] = 280;
   widths[LC.UPDATED_BY] = 170; widths[LC.LAST_ACTIVITY] = 140;
   Object.keys(widths).forEach(function (k) { sh.setColumnWidth(parseInt(k, 10), widths[k]); });
   sh.hideColumns(LC.SNAPSHOT);
@@ -591,7 +642,19 @@ function setupLeadSheetLayout_(sh, dataRows) {
   applyCustomFields_();   // header names + hide inactive slots (data is never touched)
 }
 
-/** Header-row ARRAYFORMULAs (L1, AG1, AH1). Written in their own stage because they trigger recalculation. */
+/** Restores the fixed header texts and the two header formulas (row 1 can only be changed by admins). */
+function restoreLeadHeaders_(sh) {
+  var exp = expectedLeadHeaders_();
+  var f = leadHeaderFormulas_();
+  for (var c = 1; c <= LEAD_COLS; c++) {
+    if (isCustomCol_(c)) continue;
+    if (c === LC.FU_COUNT) sh.getRange(1, c).setFormula(f.fuCount);
+    else if (c === LC.ACTIVITY_TOTAL) sh.getRange(1, c).setFormula(f.activityTotal);
+    else sh.getRange(1, c).setValue(exp[c - 1]);
+  }
+}
+
+/** Header-row ARRAYFORMULAs (V1, AG1). Written in their own stage because they trigger recalculation. */
 function setupLeadFormulas_(sh) {
   var f = leadHeaderFormulas_();
   sh.getRange(1, LC.FU_COUNT).setFormula(f.fuCount);
@@ -611,63 +674,140 @@ function leadHeaderFormulas_() {
   };
 }
 
+/**
+ * Upgrade / repair of existing lead rows: rows with data but no Lead ID (typed before this version) get an
+ * ID; every lead gets a full snapshot of its current values (the reference the edit guard restores from).
+ * Pending requirements already recorded in a snapshot are kept.
+ */
+function upgradeLeadRows_(sh, me) {
+  var last = lastLeadRow_(sh);
+  if (last < 2) return 0;
+  var n = last - 1;
+  var data = sh.getRange(2, 1, n, LEAD_COLS).getValues();
+  var settings = getSettings_();
+  var stageInfo = getStageInfo_();
+  var now = new Date();
+  var actor = { email: me || 'Setup', label: 'Setup', name: '' };
+  var ids = {};
+  data.forEach(function (r) { var id = str_(r[LC.ID - 1]); if (id) ids[id.toLowerCase()] = true; });
+  var entries = [], snaps = [], idCol = [], touchedIds = false, created = false;
+  data.forEach(function (row) {
+    var id = str_(row[LC.ID - 1]);
+    var hasData = SNAP_COLS.some(function (c) { return c !== LC.ID && !isSystemCol_(c) && str_(row[c - 1]) !== ''; });
+    if (!id && hasData) {
+      id = generateLeadId_(settings, ids, {});
+      ids[id.toLowerCase()] = true;
+      row[LC.ID - 1] = id;
+      touchedIds = true;
+      var init = initialiseNewLead_(row, settings, stageInfo, now, actor);
+      init.entries[0][LG.REMARKS - 1] = 'Lead ID given by setup (row typed before version ' + CRM_VERSION + ')';
+      entries = entries.concat(init.entries);
+      created = true;
+    }
+    idCol.push([row[LC.ID - 1]]);
+    if (!id) { snaps.push([row[LC.SNAPSHOT - 1]]); return; }
+    var old = parseSnapshot_(row[LC.SNAPSHOT - 1]);
+    if (!row[LC.CREATED - 1]) row[LC.CREATED - 1] = now;
+    snaps.push([buildSnapshot_(row, old ? { p: old.p, pc: old.pc } : {})]);
+  });
+  if (created) {
+    // initialiseNewLead_ filled defaults / dates on those rows: write the user and system columns back.
+    colRuns_(SNAP_COLS.filter(function (c) { return c !== LC.ID; })).forEach(function (run) {
+      sh.getRange(2, run[0], n, run[1] - run[0] + 1).setValues(data.map(function (r) { return r.slice(run[0] - 1, run[1]); }));
+    });
+  } else {
+    sh.getRange(2, LC.CREATED, n, 1).setValues(data.map(function (r) { return [r[LC.CREATED - 1]]; }));
+  }
+  if (touchedIds) sh.getRange(2, LC.ID, n, 1).setValues(idCol);
+  sh.getRange(2, LC.SNAPSHOT, n, 1).setValues(snaps);
+  if (entries.length) appendLogRows_(entries);
+  return n;
+}
+
+/** Header note of every column: "Editable", "Locked - admin only" or "Auto - do not edit", then what it means. */
 function addLeadHeaderNotes_(sh) {
-  var notes = {};
-  notes[LC.ID] = 'System-generated, unique and permanent. Do not type here.';
-  notes[LC.OWNER] = 'Dropdown of ACTIVE counsellors from Counsellor Master. Changing it records a reassignment.';
-  notes[LC.STAGE] = 'Dropdown of ACTIVE stages from Stage Master.';
-  notes[LC.SUBSTAGE] = 'Dependent dropdown: shows only the substages of the selected Lead Stage. Cleared automatically if the stage changes and it no longer fits.';
-  notes[LC.LAST_CONTACT] = 'Date of the latest Contact activity (updated by the follow-up form). Cannot be in the future.';
-  notes[LC.NEXT_FU] = 'Red = overdue, yellow = due today, blue = upcoming.';
-  notes[LC.FU_COUNT] = 'Formula: number of Contact activities for this Lead ID in Follow-Up Log.';
-  notes[LC.UPDATED_BY] = 'Counsellor (mapped from Google account) or email of the person who last changed this lead.';
-  notes[LC.LAST_ACTIVITY] = 'Fixed timestamp of the latest record update or follow-up (never recalculates).';
-  notes[LC.CUSTOM_FIRST] = 'Custom fields (E:N) are optional: Lead CRM > Add custom field / Remove custom field, or Lists & Settings > Custom Fields. Inactive slots are hidden; data is kept.';
-  notes[LC.CREATED] = 'Fixed timestamp written when the Lead ID was generated.';
-  notes[LC.LAST_FU_DATE] = 'Date of the latest activity logged through the follow-up form (any type).';
-  notes[LC.STAGE_CHANGED] = 'Fixed timestamp of the latest stage or substage change.';
-  notes[LC.ASSIGNED_DATE] = 'Fixed timestamp of the latest (re)assignment.';
-  notes[LC.PREV_OWNER] = 'Counsellor before the latest reassignment. Full history: Follow-Up Log (Lead Assigned).';
-  notes[LC.ACTIVITY_TOTAL] = 'Formula: Contact + Record Update entries in Follow-Up Log (System entries excluded).';
-  notes[LC.DQ_FLAGS] = 'Formula: data-quality warnings (missing/invalid contact, unassigned, stage problems, overdue). Duplicate mobiles/emails are shown in orange in C/D.';
-  notes[LC.SNAPSHOT] = 'Hidden. Used by the script to detect changes, including bulk pastes. Do not edit.';
+  var defs = {};
+  FIELD_DICTIONARY.forEach(function (d) { defs[d[0]] = d[1]; });
   var row = [];
-  for (var c = 1; c <= LEAD_COLS; c++) row.push(notes[c] || '');
+  for (var c = 1; c <= LEAD_COLS; c++) {
+    var tag = isEditableCol_(c) ? 'Editable (your own leads)' : isSystemCol_(c) ? 'Auto - do not edit' : 'Locked - admin only';
+    var key = isCustomCol_(c) ? 'CUSTOM' : lcKeyForCol_(c);
+    var extra = c === LC.NEXT_FU ? '\nDouble-click to pick a date. Red = overdue, yellow = due today, blue = upcoming.' :
+      c === LC.SUBSTAGE ? '\nShows only the substages of the chosen Lead Stage.' : '';
+    row.push(tag + '\n' + (defs[key] || '') + extra);
+  }
   sh.getRange(1, 1, 1, LEAD_COLS).setNotes([row]);
 }
 
-/** Data validation, conditional formatting, banding and filter for Lead Management (re-runnable). */
+/** Data-validation rule of a Lead Management column (null = none). Every rule REJECTS wrong values. */
+function leadColumnRule_(c) {
+  var dv = SpreadsheetApp.newDataValidation;
+  var settingsSheet = getSheet_(SHEET.SETTINGS);
+  var listRange = function (col) { return settingsSheet.getRange(colLetter_(col) + '2:' + colLetter_(col)); };
+  var today = todayDate_();
+  var settings = getSettings_();
+  switch (c) {
+    case LC.NAME: return dv().requireFormulaSatisfied(lcf_('=LEN({NAME}2)<=' + MAX_NAME_LENGTH)).setAllowInvalid(false)
+      .setHelpText('Lead Name: up to ' + MAX_NAME_LENGTH + ' characters.').build();
+    case LC.MOBILE: return dv().requireFormulaSatisfied(lcf_('=REGEXMATCH(TO_TEXT({MOBILE}2),INDIRECT("SET_MOBILE_PATTERN"))'))
+      .setAllowInvalid(false).setHelpText(settings.mobileMessage).build();
+    case LC.EMAIL: return dv().requireTextIsEmail().setAllowInvalid(false).setHelpText('Enter a valid email address.').build();
+    case LC.OWNER: return dv().requireValueInRange(listRange(LS.H_ACTIVE_CNS), true).setAllowInvalid(false)
+      .setHelpText('Choose an active counsellor.').build();
+    case LC.STAGE: return dv().requireValueInRange(listRange(LS.H_ACTIVE_STAGES), true).setAllowInvalid(false)
+      .setHelpText('Choose a stage from the list.').build();
+    case LC.PRIORITY: return dv().requireValueInRange(listRange(LS.PRIORITY), true).setAllowInvalid(false).build();
+    case LC.OUTCOME: return dv().requireValueInRange(listRange(LS.OUTCOME), true).setAllowInvalid(false).build();
+    case LC.SOURCE: return dv().requireValueInRange(listRange(LS.SOURCE), true).setAllowInvalid(false).build();
+    case LC.STATUS: return dv().requireValueInRange(listRange(LS.STATUS), true).setAllowInvalid(false).build();
+    // Fixed dates (refreshed daily by refreshDateValidations_) keep the calendar picker.
+    case LC.LAST_CONTACT: return dv().requireDateBetween(new Date(2000, 0, 1), today).setAllowInvalid(false)
+      .setHelpText('A date, not in the future. Double-click to pick it.').build();
+    case LC.NEXT_FU: return dv().requireDateBetween(today, dateFromKey_(addDaysKey_(todayKey_(), settings.maxFuDays))).setAllowInvalid(false)
+      .setHelpText('A date from today up to ' + settings.maxFuDays + ' days ahead. Double-click to pick it.').build();
+    case LC.REMARKS: return dv().requireFormulaSatisfied(lcf_('=LEN({REMARKS}2)<=INDIRECT("SET_MAX_REMARKS")')).setAllowInvalid(false)
+      .setHelpText('Up to ' + settings.maxRemarks + ' characters.').build();
+    default:
+      if (isCustomCol_(c)) {
+        var f = readCustomFields_()[c - LC.CUSTOM_FIRST];
+        if (f && f.allowed.length) return dv().requireValueInList(f.allowed, true).setAllowInvalid(false).build();
+        var L = colLetter_(c);
+        return dv().requireFormulaSatisfied('=LEN(' + L + '2)<=' + MAX_CUSTOM_LENGTH).setAllowInvalid(false)
+          .setHelpText('Up to ' + MAX_CUSTOM_LENGTH + ' characters.').build();
+      }
+      return null;
+  }
+}
+
+/**
+ * The two date rules use fixed dates (so the calendar picker appears) and are moved forward once a day
+ * by the hourly maintenance trigger.
+ */
+function refreshDateValidations_(force) {
+  var props = PropertiesService.getDocumentProperties();
+  var today = todayKey_();
+  if (!force && props.getProperty(PROP.DV_DATE) === today) return false;
+  var sh = getSheet_(SHEET.LEADS);
+  var rows = sh.getMaxRows() - 1;
+  [LC.LAST_CONTACT, LC.NEXT_FU].forEach(function (c) { sh.getRange(2, c, rows, 1).setDataValidation(leadColumnRule_(c)); });
+  props.setProperty(PROP.DV_DATE, today);
+  return true;
+}
+
+/** Data validation, conditional formatting and filter for Lead Management (re-runnable). */
 function applyLeadSheetRules_(sh) {
+  clearMemo_('validationEnv');
   var rows = sh.getMaxRows() - 1;
   var col = function (c, n) { return sh.getRange(2, c, rows, n || 1); };
-  var ls = "'Lists & Settings'!";
-  var settingsSheet = getSheet_(SHEET.SETTINGS);
-  var listRange = function (c) { return settingsSheet.getRange(colLetter_(c) + '2:' + colLetter_(c)); };
-  var dv = SpreadsheetApp.newDataValidation;
 
   col(1, LEAD_COLS).clearDataValidations();
-  col(LC.ID).setDataValidation(dv().requireFormulaSatisfied('=COUNTIF($A$2:$A,A2)=1').setAllowInvalid(false)
-    .setHelpText('Lead IDs are generated automatically and must be unique.').build());
-  col(LC.MOBILE).setDataValidation(dv().requireFormulaSatisfied(lcf_('=REGEXMATCH(TO_TEXT({MOBILE}2),INDIRECT("SET_MOBILE_PATTERN"))'))
-    .setAllowInvalid(true).setHelpText('Mobile number format looks wrong (see Lists & Settings > Mobile Number Pattern). Allowed, but flagged.').build());
-  col(LC.EMAIL).setDataValidation(dv().requireTextIsEmail().setAllowInvalid(true).setHelpText('Email format looks wrong. Allowed, but flagged.').build());
-  col(LC.OWNER).setDataValidation(dv().requireValueInRange(listRange(LS.H_ACTIVE_CNS), true).setAllowInvalid(false)
-    .setHelpText('Choose an active counsellor (Counsellor Master).').build());
-  col(LC.STAGE).setDataValidation(dv().requireValueInRange(listRange(LS.H_ACTIVE_STAGES), true).setAllowInvalid(false)
-    .setHelpText('Choose an active stage (Stage Master).').build());
-  // Substage (G): no rule on empty rows. Per-row dropdowns are created only when a stage is chosen
-  // (edit trigger / follow-up form) or for rows that already hold leads (refreshAllSubstageValidations_).
-  col(LC.PRIORITY).setDataValidation(dv().requireValueInRange(listRange(LS.PRIORITY), true).setAllowInvalid(false).build());
-  col(LC.LAST_CONTACT).setDataValidation(dv().requireFormulaSatisfied(lcf_('=AND(ISDATE({LAST_CONTACT}2),INT({LAST_CONTACT}2)<=TODAY())')).setAllowInvalid(false)
-    .setHelpText('Enter a valid date that is not in the future.').build());
-  col(LC.NEXT_FU).setDataValidation(dv().requireDate().setAllowInvalid(false).setHelpText('Enter a valid date (dd-mmm-yyyy).').build());
-  col(LC.OUTCOME).setDataValidation(dv().requireValueInRange(listRange(LS.OUTCOME), true).setAllowInvalid(false).build());
-  col(LC.SOURCE).setDataValidation(dv().requireValueInRange(listRange(LS.SOURCE), true).setAllowInvalid(true)
-    .setHelpText('Choose a source from Lists & Settings (other values are allowed but flagged).').build());
-  col(LC.STATUS).setDataValidation(dv().requireValueInRange(listRange(LS.STATUS), true).setAllowInvalid(false).build());
+  for (var c = 1; c <= LEAD_COLS; c++) {
+    if (c === LC.SUBSTAGE) continue;   // per-row dependent dropdowns (refreshAllSubstageValidations_)
+    var rule = leadColumnRule_(c);
+    if (rule) col(c).setDataValidation(rule);
+  }
 
   // Conditional formatting: earlier rules win.
-  var full = col(1, LEAD_COLS);
   var cf = function (formula, ranges, bg, font, bold, extra) {
     var b = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied(formula).setRanges(ranges);
     if (bg) b.setBackground(bg);
@@ -677,25 +817,25 @@ function applyLeadSheetRules_(sh) {
     return b.build();
   };
   sh.setConditionalFormatRules([
-    cf(lcf_('=${STATUS}2="Converted"'), [full], '#D5F5E3', '#145A32'),
-    cf(lcf_('=OR(${STATUS}2="Lost",${STATUS}2="Duplicate")'), [full], '#E5E7E9', '#7B7D7D', false, function (b) { b.setItalic(true); }),
-    cf(lcf_('=AND(ISNUMBER(${NEXT_FU}2),${NEXT_FU}2<TODAY())'), [col(LC.ID), col(LC.NEXT_FU)], '#F5B7B1', '#922B21', true),
-    cf(lcf_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)=TODAY())'), [col(LC.ID), col(LC.NEXT_FU)], '#FCF3CF', '#7D6608', true),
+    // Incomplete leads: red Lead ID and name (always visible: frozen columns) and red flags.
+    cf(lcf_('=LEFT(${DQ_FLAGS}2,10)="Incomplete"'), [col(LC.ID, 2), col(LC.DQ_FLAGS)], '#E74C3C', '#FFFFFF', true),
+    cf(lcf_('=AND(ISNUMBER(${NEXT_FU}2),${NEXT_FU}2<TODAY(),${STATUS}2<>"Converted",${STATUS}2<>"Lost",${STATUS}2<>"Duplicate")'), [col(LC.NEXT_FU)], '#F5B7B1', '#922B21', true),
+    cf(lcf_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)=TODAY())'), [col(LC.NEXT_FU)], '#FCF3CF', '#7D6608', true),
     cf(lcf_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)>TODAY(),INT(${NEXT_FU}2)<=TODAY()+INDIRECT("SET_UPCOMING_DAYS"))'), [col(LC.NEXT_FU)], '#D6EAF8', '#1B4F72'),
+    cf(lcf_('=${STATUS}2="Converted"'), [col(LC.STATUS)], '#D5F5E3', '#145A32', true),
+    cf(lcf_('=OR(${STATUS}2="Lost",${STATUS}2="Duplicate")'), [col(LC.STATUS)], '#E5E7E9', '#7B7D7D', false, function (b) { b.setItalic(true); }),
     cf(lcf_('=${PRIORITY}2="Critical"'), [col(LC.PRIORITY)], '#922B21', '#FFFFFF', true),
     cf(lcf_('=${PRIORITY}2="Hot"'), [col(LC.PRIORITY)], '#F5CBA7', '#784212', true),
     // Duplicates are detected by the script (Data Quality Flags), so these rules only read the same row.
     cf(lcf_('=ISNUMBER(SEARCH("Duplicate mobile",${DQ_FLAGS}2))'), [col(LC.MOBILE)], '#FAD7A0', '#784212'),
     cf(lcf_('=ISNUMBER(SEARCH("Duplicate email",${DQ_FLAGS}2))'), [col(LC.EMAIL)], '#FAD7A0', '#784212'),
     cf(lcf_('=${DQ_FLAGS}2<>""'), [col(LC.DQ_FLAGS)], null, COLORS.amber, false, function (b) { b.setItalic(true); }),
-    // Last rule: locked (read-only for counsellors) cells are light grey unless a rule above applies.
-    cf('=TRUE', colRuns_(lockedCols_()).map(function (r) { return col(r[0], r[1] - r[0] + 1); }), COLORS.lockedCell, '#566573')
-  ]);
+    // Last rules: every locked cell is grey, every editable cell white (also after a paste copied colours).
+    cf('=TRUE', colRuns_(lockedCols_()).map(function (r) { return col(r[0], r[1] - r[0] + 1); }), COLORS.lockedCell, '#566573'),
+    cf('=TRUE', colRuns_(editableCols_()).map(function (r) { return col(r[0], r[1] - r[0] + 1); }), '#FFFFFF', '#202124')
+  ].filter(function (r) { return r; }));
 
   sh.getBandings().forEach(function (b) { b.remove(); });
-  col(1, LEAD_COLS).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false)
-    .setFirstRowColor('#FFFFFF').setSecondRowColor(COLORS.band);
-
   if (sh.getFilter()) sh.getFilter().remove();
   sh.getRange(1, 1, sh.getMaxRows(), LEAD_COLS).createFilter();
 }
@@ -709,6 +849,7 @@ function extendLeadSheet() {
   try {
     sh.insertRowsAfter(sh.getMaxRows(), 5000);
     applyLeadSheetRules_(sh);
+    refreshDateValidations_(true);
     refreshAllSubstageValidations_();
     applyProtections_(ss_());
   } finally {
@@ -742,6 +883,9 @@ function setupLogSheet_(sh, leadRows) {
   sh.getRange(2, LG.CATEGORY, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation()
     .requireValueInList([CATEGORY.CONTACT, CATEGORY.RECORD, CATEGORY.SYSTEM], true).setAllowInvalid(true).build());
   sh.setConditionalFormatRules([
+    // Entries of deleted leads stay in the log, struck through.
+    SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=AND($B2<>"",COUNTIF(INDIRECT("\'Deleted Leads\'!D2:D"),$B2)>0)')
+      .setFontColor('#A6ACAF').setStrikethrough(true).setRanges([sh.getRange(2, 1, rows, LOG_COLS)]).build(),
     SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=$M2="System"').setFontColor('#909497')
       .setRanges([sh.getRange(2, 1, rows, LOG_COLS)]).build(),
     SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=$M2="Record Update"').setFontColor('#1B4F72')
@@ -762,10 +906,13 @@ function setupLogSheet_(sh, leadRows) {
 /* ================================================================== */
 
 /**
- * Strict protection (admins only): header row of Lead Management, master sheets, Lists & Settings,
- * Dashboard (except its filter cells). Warning-only protection: system / formula columns of Lead
- * Management and the whole Follow-Up Log — the follow-up form and simple trigger run as the caller and
- * must be able to write there, and callers must be able to sort the sheet.
+ * Protection model (all STRICT; admins and the owner keep full access):
+ *  - Lead Management: the whole sheet is protected; only the counsellor-editable columns of rows that hold
+ *    a lead are left open (updateLeadProtection_). Header row, empty rows, contact / assignment and
+ *    automatic columns are therefore closed to counsellors. Automatic columns are also guarded against
+ *    admins and the owner by the edit trigger (Google never blocks the owner).
+ *  - Every other sheet: admins only (Dashboard: its filter cells stay open).
+ * The installable triggers run as the owner and write wherever they need to.
  */
 function applyProtections_(ss) {
   clearMemo_();
@@ -787,29 +934,29 @@ function applyProtections_(ss) {
     if (p.canDomainEdit()) p.setDomainEdit(false);
     return p;
   };
-  var warn = function (p, desc) { p.setDescription('CRM: ' + desc).setWarningOnly(true); return p; };
-  // STRICT for locked columns when the installable trigger (running as the owner) does the system
-  // writes; warning-only in legacy simple mode, where the trigger runs as the editor.
-  var lockIt = strictMode_() ? strict : warn;
 
-  var leads = ss.getSheetByName(SHEET.LEADS);
-  var rows = leads.getMaxRows() - 1;
-  strict(leads.getRange(1, 1, 1, LEAD_COLS).protect(), 'Lead Management header row (admins rename custom fields)');
-  colRuns_(lockedCols_()).forEach(function (run) {
-    lockIt(leads.getRange(2, run[0], rows, run[1] - run[0] + 1).protect(),
-      'Locked for counsellors: ' + colLetter_(run[0]) + (run[1] > run[0] ? ':' + colLetter_(run[1]) : ''));
-  });
-
-  lockIt(ss.getSheetByName(SHEET.LOG).protect(), 'Follow-Up Log is append-only - written by the CRM script');
-  var access = ss.getSheetByName(SHEET.ACCESS_LOG);
-  if (access) strict(access.protect(), 'Access Log (admins)');
-  strict(ss.getSheetByName(SHEET.STAGES).protect(), 'Stage Master (admins)');
-  strict(ss.getSheetByName(SHEET.COUNSELLORS).protect(), 'Counsellor Master (admins)');
-  strict(ss.getSheetByName(SHEET.SETTINGS).protect(), 'Lists & Settings (admins)');
+  strict(ss.getSheetByName(SHEET.LEADS).protect(), 'Lead Management (counsellors: white cells of their leads only)');
+  updateLeadProtection_();
+  [[SHEET.LOG, 'Follow-Up Log is written by the CRM'], [SHEET.ACCESS_LOG, 'Access Log (admins)'],
+    [SHEET.STAGES, 'Stage Master (admins)'], [SHEET.COUNSELLORS, 'Counsellor Master (admins)'],
+    [SHEET.SETTINGS, 'Lists & Settings (admins)'], [SHEET.ENTRY, 'Lead Entry (admins)'],
+    [SHEET.DELETED, 'Deleted Leads (admins)'], [SHEET.START, 'Start Here (admins)'], [SHEET.GUIDE, 'Field Guide (admins)']
+  ].forEach(function (x) { var sh = ss.getSheetByName(x[0]); if (sh) strict(sh.protect(), x[1]); });
   var dash = ss.getSheetByName(SHEET.DASHBOARD);
-  var dp = strict(dash.protect(), 'Dashboard formulas and charts (admins)');
-  dp.setUnprotectedRanges([DASH.PERIOD, DASH.CUSTOM_FROM, DASH.CUSTOM_TO, DASH.COUNSELLOR, DASH.REFRESHED]
+  var dp = strict(dash.protect(), 'Dashboard (admins)');
+  dp.setUnprotectedRanges([DASH.PERIOD, DASH.CUSTOM_FROM, DASH.CUSTOM_TO, DASH.COUNSELLOR]
     .map(function (a1) { return dash.getRange(a1); }));
+}
+
+/** Opens the counsellor-editable columns of rows 2..last lead row (call after leads are added / removed). */
+function updateLeadProtection_() {
+  var sh = getSheet_(SHEET.LEADS);
+  var p = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).filter(function (x) { return /^CRM:/.test(x.getDescription() || ''); })[0];
+  if (!p) return false;
+  var last = lastLeadRow_(sh);
+  var ranges = last < 2 ? [] : colRuns_(editableCols_()).map(function (r) { return sh.getRange(2, r[0], last - 1, r[1] - r[0] + 1); });
+  p.setUnprotectedRanges(ranges);
+  return true;
 }
 
 /** Admin > Reapply protections (after editing the Admin Emails setting). */
@@ -820,16 +967,17 @@ function reapplyProtections() {
 }
 
 /**
- * Installable triggers run as the person who ran setup (must be the owner or an admin who can edit
- * every protected range): onEdit (system writes), onChange (dropdowns after sort), onOpen (access log)
- * and an hourly maintenance run (data-quality flags + dashboard).
+ * Installable triggers run as the person who ran setup (must be the owner): onEdit (the edit guard),
+ * onChange (column check, dropdowns after sort), onOpen (access log), hourly maintenance and the
+ * every-minute follow-up queue (saves made by counsellors with the form).
  */
 function installCoreTriggers_(ss) {
   var have = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
   if (have.indexOf('onChangeInstallable') < 0) ScriptApp.newTrigger('onChangeInstallable').forSpreadsheet(ss).onChange().create();
-  if (strictMode_() && have.indexOf('onEditInstallable') < 0) ScriptApp.newTrigger('onEditInstallable').forSpreadsheet(ss).onEdit().create();
+  if (have.indexOf('onEditInstallable') < 0) ScriptApp.newTrigger('onEditInstallable').forSpreadsheet(ss).onEdit().create();
   if (have.indexOf('onOpenInstallable') < 0) ScriptApp.newTrigger('onOpenInstallable').forSpreadsheet(ss).onOpen().create();
   if (have.indexOf('scheduledMaintenance') < 0) ScriptApp.newTrigger('scheduledMaintenance').timeBased().everyHours(1).create();
+  if (have.indexOf('processQueuedFollowUps') < 0) ScriptApp.newTrigger('processQueuedFollowUps').timeBased().everyMinutes(1).create();
 }
 
 function initCounters_() {
@@ -841,7 +989,7 @@ function initCounters_() {
   if (!props.getProperty(PROP.ACT_SEQ)) {
     props.setProperty(PROP.ACT_SEQ, String(maxIdNumber_(getSheet_(SHEET.LOG), LG.ACT_ID, settings.actPrefix)));
   }
-  if (!props.getProperty(PROP.EDIT_MODE)) props.setProperty(PROP.EDIT_MODE, 'installable');
+  props.deleteProperty(PROP.EDIT_MODE);   // the legacy "simple" mode no longer exists
 }
 
 /**

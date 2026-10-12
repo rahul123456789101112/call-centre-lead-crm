@@ -3,24 +3,32 @@
  * Shared constants and helpers used by every other file in the Lead CRM project.
  *
  * Column numbers are 1-based. Do NOT insert, delete or reorder columns A:AI on
- * "Lead Management" or A:R on "Follow-Up Log". The script addresses columns by position.
+ * "Lead Management" or A:R on "Follow-Up Log". The script addresses columns by position
+ * (inserted / deleted columns are detected by the onChange trigger, see Triggers.gs).
  * Custom fields (E:N) are managed by hiding/showing their fixed columns (Lead CRM > Add/Remove
  * custom field), never by inserting or deleting columns. Formulas get column letters from LC via lcf_().
  */
 
 var CRM_TITLE = 'Lead CRM';
-var CRM_VERSION = '1.0.0';
+var CRM_VERSION = '2.0.0';
 
 var SHEET = {
+  START: 'Start Here',
   LEADS: 'Lead Management',
+  DASHBOARD: 'Dashboard',
+  GUIDE: 'Field Guide',
+  ENTRY: 'Lead Entry',
   LOG: 'Follow-Up Log',
   STAGES: 'Stage Master',
   COUNSELLORS: 'Counsellor Master',
-  DASHBOARD: 'Dashboard',
   SETTINGS: 'Lists & Settings',
-  ACCESS_LOG: 'Access Log'
+  ACCESS_LOG: 'Access Log',
+  DELETED: 'Deleted Leads'
 };
-var SHEET_ORDER = [SHEET.LEADS, SHEET.LOG, SHEET.STAGES, SHEET.COUNSELLORS, SHEET.DASHBOARD, SHEET.SETTINGS, SHEET.ACCESS_LOG];
+var SHEET_ORDER = [SHEET.START, SHEET.LEADS, SHEET.DASHBOARD, SHEET.GUIDE, SHEET.ENTRY, SHEET.LOG, SHEET.STAGES,
+  SHEET.COUNSELLORS, SHEET.SETTINGS, SHEET.ACCESS_LOG, SHEET.DELETED];
+/** Sheets counsellors do not need: hidden after setup (Admin > Show admin sheets brings them back). */
+var ADMIN_SHEETS = [SHEET.ENTRY, SHEET.LOG, SHEET.STAGES, SHEET.COUNSELLORS, SHEET.SETTINGS, SHEET.ACCESS_LOG, SHEET.DELETED];
 
 var LEAD_DATA_ROWS = 10000;   // pre-sized data rows on Lead Management
 var LOG_INITIAL_ROWS = 5000;  // pre-sized rows on Follow-Up Log (grows automatically)
@@ -56,8 +64,14 @@ var LEAD_FORMULA_COLS = [LC.FU_COUNT, LC.ACTIVITY_TOTAL];
 /** Columns written only by the script (Data Quality Flags are computed by the script, not a formula). */
 var LEAD_SYSTEM_COLS = [LC.ID, LC.UPDATED_BY, LC.LAST_ACTIVITY, LC.CREATED, LC.LAST_FU_DATE,
   LC.STAGE_CHANGED, LC.ASSIGNED_DATE, LC.PREV_OWNER, LC.DQ_FLAGS, LC.SNAPSHOT];
-/** Default "Counsellor-Locked Fields" (Lists & Settings). System and formula columns are always locked. */
-var DEFAULT_LOCKED_FIELDS = ['Lead ID', 'Mobile Number', 'Email ID', 'Assigned Counsellor', 'Lead Created Date', 'Lead Source'];
+/** Contact / assignment columns: locked for counsellors, editable by admins (every change audited). */
+var LEAD_ADMIN_COLS = [LC.NAME, LC.MOBILE, LC.EMAIL, LC.OWNER, LC.SOURCE];
+/** Columns that may appear in "Counsellor-Editable Fields" (plus custom fields). */
+var EDITABLE_CANDIDATE_COLS = [LC.STAGE, LC.SUBSTAGE, LC.PRIORITY, LC.LAST_CONTACT, LC.NEXT_FU, LC.OUTCOME, LC.REMARKS, LC.STATUS];
+var ALL_CUSTOM_FIELDS = 'All Custom Fields';
+/** Default Lists & Settings > Counsellor-Editable Fields. Everything else is locked for counsellors. */
+var DEFAULT_EDITABLE_FIELDS = ['Lead Stage', 'Lead Substage', 'Lead Priority', 'Next Follow-Up Date', 'Last Follow-Up Outcome',
+  'Lead Remarks', 'Lead Status', ALL_CUSTOM_FIELDS];
 
 /* ---------- Follow-Up Log columns ---------- */
 var LG = {
@@ -82,8 +96,9 @@ var LS = {
   PRIORITY: 1, OUTCOME: 2, SOURCE: 3, STATUS: 4, ACT_TYPE: 5, ACT_CATEGORY: 6, ACT_SIDEBAR: 7,
   ACTIVE_VALUES: 8, BUCKET_LABEL: 10, BUCKET_MIN: 11, BUCKET_MAX: 12, SET_KEY: 14, SET_VALUE: 15,
   SET_DESC: 16, H_ACTIVE_STAGES: 18, H_ALL_STAGES: 19, H_ACTIVE_CNS: 20, H_CNS_FILTER: 21,
-  H_PERIODS: 22, H_PAIRS: 23, CF_SLOT: 26, CF_NAME: 27, CF_ACTIVE: 28, LOCKED: 30
+  H_PERIODS: 22, H_PAIRS: 23, CF_SLOT: 26, CF_NAME: 27, CF_ACTIVE: 28, CF_ALLOWED: 29, OLD_LOCKED: 30, EDITABLE: 31
 };
+var EDITABLE_HEADER = 'Counsellor-Editable Fields';
 
 /* ---------- Access Log (portal / sheet access audit) ---------- */
 var AL_HEADERS = ['Timestamp', 'User Email', 'Counsellor', 'Action', 'Lead ID', 'Details', 'Source'];
@@ -98,7 +113,10 @@ var CLOSED_STATUSES = [STATUS.CONVERTED, STATUS.LOST, STATUS.DUPLICATE];
 var ACT = {
   LEAD_CREATED: 'Lead Created', LEAD_ASSIGNED: 'Lead Assigned', STAGE_UPDATED: 'Stage Updated',
   STATUS_UPDATED: 'Status Updated', FU_SCHEDULED: 'Follow-Up Scheduled',
-  SUBSTAGE_CLEARED: 'Substage Cleared', LOG_EDITED: 'Log Edited'
+  SUBSTAGE_CLEARED: 'Substage Cleared', LOG_EDITED: 'Log Edited', FIELD_UPDATED: 'Field Updated',
+  EDIT_REVERTED: 'Edit Reverted', SHEET_UPDATE: 'Sheet Update', LEAD_DELETED: 'Lead Deleted',
+  LEAD_RESTORED: 'Lead Restored', LEAD_PURGED: 'Lead Purged', SYS_CORRECTED: 'System Field Corrected',
+  CORRECTION_OPENED: 'Correction Window Opened'
 };
 
 var PERIODS = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Current Month', 'Previous Month', 'Custom Date Range'];
@@ -121,7 +139,13 @@ var SET = {
   UPCOMING_DAYS: 'Upcoming Follow-Up Window (Days)',
   REQUIRE_NEXT_FU: 'Require Next Follow-Up For Open Leads',
   REQUIRE_REMARKS: 'Require Remarks On Follow-Up',
-  MAX_BACKDATE: 'Max Backdate Days For Activities',
+  REQUIRE_SUBSTAGE: 'Require Substage',
+  MAX_FU_DAYS: 'Max Next Follow-Up Days',
+  MAX_REMARKS: 'Max Remarks Length',
+  MOBILE_MESSAGE: 'Mobile Number Message',
+  BLOCK_UNKNOWN: 'Block Edits From Unknown Users',
+  FORM_ACTIVITY: 'Follow-Up Form Activity Type',
+  MAX_BACKDATE: 'Max Backdate Days For Activities',   // obsolete (removed from the sheet by setup)
   REMINDERS: 'Email Reminders Enabled',
   REMINDER_HOUR: 'Reminder Hour (0-23)',
   ADMINS: 'Admin Emails'
@@ -132,37 +156,46 @@ var DEFAULT_SETTINGS = [
   [SET.LEAD_PREFIX, 'LD-', 'Text placed before the running number of every new Lead ID.'],
   [SET.LEAD_DIGITS, 6, 'Number of digits in the running number (LD-000001).'],
   [SET.ACT_PREFIX, 'ACT-', 'Text placed before every Activity ID in Follow-Up Log.'],
-  [SET.DEFAULT_STATUS, STATUS.OPEN, 'Lead Status given to a new lead when none is entered.'],
-  [SET.DEFAULT_STAGE, 'New Lead', 'Lead Stage given to a new lead when none is entered (blank = none).'],
+  [SET.DEFAULT_STATUS, STATUS.OPEN, 'Lead Status given to every new lead.'],
+  [SET.DEFAULT_STAGE, 'New Lead', 'Lead Stage given to every new lead (blank = none).'],
   [SET.DEFAULT_SUBSTAGE, 'Not Contacted', 'Substage given with the default stage (must belong to it).'],
-  [SET.CONVERTED_STAGE, 'Converted', 'Moving a lead to this stage sets Lead Status = Converted.'],
-  [SET.LOST_STAGE, 'Lost', 'Moving a lead to this stage sets Lead Status = Lost.'],
+  [SET.CONVERTED_STAGE, 'Converted', 'Lead Status "Converted" is only allowed in this stage; moving a lead here sets it.'],
+  [SET.LOST_STAGE, 'Lost', 'Lead Status "Lost" is only allowed in this stage; moving a lead here sets it.'],
   [SET.AUTO_SYNC, 'Yes', 'Yes = apply the two rules above automatically.', ['Yes', 'No']],
-  [SET.DUP_MOBILE, 'Warn', 'Off = no check; Warn = allow but flag; Block = reject a duplicate mobile.', ['Off', 'Warn', 'Block']],
-  [SET.DUP_EMAIL, 'Warn', 'Off = no check; Warn = allow but flag; Block = reject a duplicate email.', ['Off', 'Warn', 'Block']],
-  [SET.MOBILE_PATTERN, '^\\+?[0-9]{10,15}$', 'Regular expression a valid mobile number must match (warning only).'],
+  [SET.DUP_MOBILE, 'Warn', 'Off = no check; Warn = allow but flag; Block = refuse a duplicate mobile.', ['Off', 'Warn', 'Block']],
+  [SET.DUP_EMAIL, 'Warn', 'Off = no check; Warn = allow but flag; Block = refuse a duplicate email.', ['Off', 'Warn', 'Block']],
+  [SET.MOBILE_PATTERN, '^[0-9]{10}$', 'Pattern a mobile number must match after spaces and dashes are removed. Numbers that do not match are refused.'],
+  [SET.MOBILE_MESSAGE, 'Mobile number must be 10 digits.', 'Message shown when a mobile number does not match the pattern above.'],
   [SET.UPCOMING_DAYS, 3, 'Follow-ups due within this many days are highlighted as upcoming.'],
-  [SET.REQUIRE_NEXT_FU, 'Yes', 'Yes = the follow-up form requires a next follow-up date while the lead stays open.', ['Yes', 'No']],
-  [SET.REQUIRE_REMARKS, 'Yes', 'Yes = the follow-up form requires remarks.', ['Yes', 'No']],
-  [SET.MAX_BACKDATE, 7, 'How many days in the past a caller may date an activity in the follow-up form.'],
+  [SET.REQUIRE_NEXT_FU, 'Yes', 'Yes = after a stage or outcome change, an open lead needs a new next follow-up date (until then it shows as Incomplete).', ['Yes', 'No']],
+  [SET.REQUIRE_SUBSTAGE, 'Yes', 'Yes = a substage is needed when the stage has substages (for Lost: the lost reason).', ['Yes', 'No']],
+  [SET.REQUIRE_REMARKS, 'Yes', 'Yes = the follow-up form needs remarks.', ['Yes', 'No']],
+  [SET.MAX_FU_DAYS, 365, 'Latest allowed next follow-up date, in days from today.'],
+  [SET.MAX_REMARKS, 500, 'Maximum number of characters in Lead Remarks and form remarks.'],
+  [SET.FORM_ACTIVITY, 'Outbound Call', 'Activity Type recorded for follow-ups saved with the follow-up form.'],
+  [SET.BLOCK_UNKNOWN, 'Yes', 'Yes = edits in Lead Management are undone when the CRM cannot tell who made them (the person must use the Lead CRM menu once).', ['Yes', 'No']],
   [SET.REMINDERS, 'No', 'Daily email reminders. Change only through Lead CRM > Admin > Enable daily email reminders.', ['Yes', 'No']],
   [SET.REMINDER_HOUR, 8, 'Hour of day (spreadsheet time zone) when reminders are sent.'],
-  [SET.ADMINS, '', 'Comma-separated emails of CRM administrators (can edit master sheets and run Admin menu).']
+  [SET.ADMINS, '', 'Comma-separated emails of CRM administrators (any email provider). Then run Admin > Reapply protections.']
 ];
+/** Settings rows removed by setup because the feature no longer exists. */
+var OBSOLETE_SETTINGS = [SET.MAX_BACKDATE];
 
 /** Settings cells exposed as named ranges so formulas, validation and formatting can read them. */
 var NAMED = {
   MOBILE_PATTERN: { name: 'SET_MOBILE_PATTERN', key: SET.MOBILE_PATTERN },
   UPCOMING_DAYS: { name: 'SET_UPCOMING_DAYS', key: SET.UPCOMING_DAYS },
   DUP_MOBILE: { name: 'SET_DUP_MOBILE', key: SET.DUP_MOBILE },
-  DUP_EMAIL: { name: 'SET_DUP_EMAIL', key: SET.DUP_EMAIL }
+  DUP_EMAIL: { name: 'SET_DUP_EMAIL', key: SET.DUP_EMAIL },
+  MAX_REMARKS: { name: 'SET_MAX_REMARKS', key: SET.MAX_REMARKS }
 };
 
 var PROP = {
   LEAD_SEQ: 'LEAD_SEQ', ACT_SEQ: 'ACT_SEQ', EDIT_MODE: 'EDIT_MODE', USER_KEY_PREFIX: 'UK_',
   DASH_LAYOUT: 'DASH_LAYOUT', LAST_SUBSTAGE_REFRESH: 'LAST_SUBSTAGE_REFRESH',
   SUBSTAGE_MAP: 'SUBSTAGE_MAP_V1', WEB_APP_URL: 'WEB_APP_URL', DASH_CHART_COUNTS: 'DASH_CHART_COUNTS',
-  IDENTITY_URL: 'IDENTITY_URL', IDENTITY_SECRET: 'IDENTITY_SECRET'
+  IDENTITY_URL: 'IDENTITY_URL', IDENTITY_SECRET: 'IDENTITY_SECRET', QUEUE_PREFIX: 'FUQ_',
+  CORRECTION: 'SYS_CORRECTION', DV_DATE: 'DV_DATE'
 };
 
 /* ================================================================== */
@@ -338,7 +371,12 @@ function getSettings_() {
       upcomingDays: num(m[SET.UPCOMING_DAYS], 3),
       requireNextFu: yes_(m[SET.REQUIRE_NEXT_FU]),
       requireRemarks: yes_(m[SET.REQUIRE_REMARKS]),
-      maxBackdateDays: Math.max(num(m[SET.MAX_BACKDATE], 7), 0),
+      requireSubstage: yes_(m[SET.REQUIRE_SUBSTAGE]),
+      maxFuDays: Math.max(num(m[SET.MAX_FU_DAYS], 365), 1),
+      maxRemarks: Math.min(Math.max(num(m[SET.MAX_REMARKS], 500), 20), 5000),
+      mobileMessage: str_(m[SET.MOBILE_MESSAGE]) || 'Mobile number format is not valid.',
+      blockUnknown: yes_(m[SET.BLOCK_UNKNOWN]),
+      formActivity: str_(m[SET.FORM_ACTIVITY]) || 'Outbound Call',
       remindersEnabled: yes_(m[SET.REMINDERS]),
       reminderHour: Math.min(Math.max(num(m[SET.REMINDER_HOUR], 8), 0), 23),
       adminEmails: str_(m[SET.ADMINS]).split(/[,;\s]+/).map(function (e) { return e.toLowerCase(); })
@@ -445,7 +483,8 @@ function getStageInfo_() {
 /** All counsellors from Counsellor Master. */
 function getCounsellors_() {
   return memo_('counsellors', function () {
-    var sh = getSheet_(SHEET.COUNSELLORS);
+    var sh = ss_().getSheetByName(SHEET.COUNSELLORS);
+    if (!sh) return [];
     var last = sh.getLastRow();
     if (last < 2) return [];
     return sh.getRange(2, 1, last - 1, COUNSELLOR_HEADERS.length).getValues()
@@ -517,7 +556,8 @@ function getActor_(e) {
   }
   var c = counsellorForEmail_(email);
   var name = c ? c.name : '';
-  return { email: email, name: name, label: name || email || 'Unidentified user' };
+  return { email: email, name: name, label: name || email || 'Unidentified user', admin: isAdmin_(email),
+    counsellor: c && c.active ? c.name : '' };
 }
 
 /* ---------- Editor key hand-off between the two edit triggers ---------- */
@@ -566,7 +606,8 @@ function registerCurrentUser_() {
     } catch (err) { /* ignore */ }
   }
   var c = counsellorForEmail_(email);
-  return { email: email, name: c ? c.name : '', label: (c && c.name) || email || 'Unidentified user' };
+  return { email: email, name: c ? c.name : '', label: (c && c.name) || email || 'Unidentified user',
+    admin: isAdmin_(email), counsellor: c && c.active ? c.name : '' };
 }
 
 /** Admin Emails setting plus the spreadsheet owner (used for sheet protection and the Admin menu). */
@@ -594,8 +635,8 @@ function requireAdmin_() {
   var email = '';
   try { email = Session.getActiveUser().getEmail(); } catch (e) { /* ignore */ }
   if (isAdmin_(email)) { registerCurrentUser_(); return email; }
-  var msg = 'This action is restricted to CRM administrators (Lists & Settings > "' + SET.ADMINS + '").' +
-    (email ? '' : ' Your email address is not visible to the script.');
+  var msg = 'Only CRM administrators can do this.' +
+    (email ? ' (' + email + ' is not in Lists & Settings > ' + SET.ADMINS + '.)' : ' Google did not tell the CRM who you are.');
   notify_(msg);   // non-blocking: ui.alert would pause the script until someone clicks OK
   throw new Error(msg);
 }
@@ -666,13 +707,67 @@ function readTracked_(row) {
   };
 }
 
+/** Columns whose last accepted value is kept in the snapshot (everything except formulas, flags, snapshot). */
+var SNAP_COLS = (function () {
+  var out = [];
+  for (var c = 1; c <= LEAD_COLS; c++) {
+    if (c === LC.FU_COUNT || c === LC.ACTIVITY_TOTAL || c === LC.DQ_FLAGS || c === LC.SNAPSHOT) continue;
+    out.push(c);
+  }
+  return out;
+})();
+
+function encodeVal_(v) {
+  if (isDate_(v)) return { d: v.getTime() };
+  return v === null || v === undefined ? '' : v;
+}
+function decodeVal_(x) {
+  if (x && typeof x === 'object' && typeof x.d === 'number') return new Date(x.d);
+  return x === null || x === undefined ? '' : x;
+}
+/** Comparable form of a cell value (dates by time, everything else as text). */
+function cellKey_(v) {
+  if (isDate_(v)) return 'D' + v.getTime();
+  return v === null || v === undefined ? '' : String(v);
+}
+function isDate_(v) { return Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime()); }
+
+/**
+ * Snapshot (hidden column AI) = the last ACCEPTED value of every lead column, plus:
+ *   p  = required fields still missing because of a change (e.g. ["Next Follow-Up Date"] after an outcome change)
+ *   pc = outcome changes made in the sheet that are not yet counted as follow-ups (lead incomplete)
+ * The edit guard compares the sheet with this snapshot and restores anything that was not allowed.
+ */
+function buildSnapshot_(row, extra) {
+  extra = extra || {};
+  var t = readTracked_(row);
+  var v = {};
+  SNAP_COLS.forEach(function (c) {
+    var x = row[c - 1];
+    if (x !== '' && x !== null && x !== undefined) v[c] = encodeVal_(x);
+  });
+  t.v = v;
+  if (extra.p && extra.p.length) t.p = extra.p;
+  if (extra.pc && extra.pc.length) t.pc = extra.pc.slice(-10);
+  return JSON.stringify(t);
+}
+
 function parseSnapshot_(v) {
   var s = str_(v);
   if (!s || s.charAt(0) !== '{') return null;
   try {
     var o = JSON.parse(s);
-    return { o: str_(o.o), s: str_(o.s), ss: str_(o.ss), st: str_(o.st), n: str_(o.n) };
+    return {
+      o: str_(o.o), s: str_(o.s), ss: str_(o.ss), st: str_(o.st), n: str_(o.n),
+      v: o.v && typeof o.v === 'object' ? o.v : null, p: Array.isArray(o.p) ? o.p : [], pc: Array.isArray(o.pc) ? o.pc : []
+    };
   } catch (e) { return null; }
+}
+
+/** Last accepted value of a column ('' if none). Only meaningful for full (v2) snapshots. */
+function snapValue_(snap, col) {
+  if (!snap || !snap.v) return '';
+  return decodeVal_(snap.v[col]);
 }
 
 function trackedKeyForCol_(col) {
@@ -687,50 +782,76 @@ function trackedKeyForCol_(col) {
 }
 
 /* ================================================================== */
-/* Edit trigger mode                                                   */
+/* Column groups: editable / admin-only / automatic                    */
 /* ================================================================== */
 
-/**
- * 'installable' (default): system writes are done by the installable onEdit trigger running as the
- * owner, so locked columns can use STRICT protection. 'simple': legacy mode for setups without the
- * installable trigger; protections fall back to warning-only.
- */
-function getEditMode_() {
-  try {
-    return PropertiesService.getDocumentProperties().getProperty(PROP.EDIT_MODE) || 'installable';
-  } catch (e) { return 'installable'; }
+function isSystemCol_(c) { return LEAD_SYSTEM_COLS.indexOf(c) >= 0 || LEAD_FORMULA_COLS.indexOf(c) >= 0; }
+function isCustomCol_(c) { return c >= LC.CUSTOM_FIRST && c <= LC.CUSTOM_LAST; }
+
+/** Header label of a Lead Management column (custom fields use their Field Name). */
+function leadLabel_(c) {
+  if (isCustomCol_(c)) {
+    try {
+      var f = readCustomFields_()[c - LC.CUSTOM_FIRST];
+      if (f && f.name) return f.name;
+    } catch (e) { /* settings not built */ }
+  }
+  return LEAD_HEADERS[c - 1];
 }
 
-function strictMode_() { return getEditMode_() === 'installable'; }
-
-/* ================================================================== */
-/* Locked (read-only for counsellors) columns                          */
-/* ================================================================== */
-
-/** Column numbers counsellors may not edit: system + formula columns + Lists & Settings > Counsellor-Locked Fields. */
-function lockedCols_() {
-  return memo_('lockedCols', function () {
-    var cols = LEAD_SYSTEM_COLS.concat(LEAD_FORMULA_COLS);
-    var names = [];
+/** Names listed in Lists & Settings > Counsellor-Editable Fields (defaults until the list exists). */
+function editableFieldNames_() {
+  return memo_('editableNames', function () {
     var sh = ss_().getSheetByName(SHEET.SETTINGS);
-    if (sh && sh.getMaxColumns() >= LS.LOCKED && str_(sh.getRange(1, LS.LOCKED).getValue())) {
+    if (sh && sh.getMaxColumns() >= LS.EDITABLE && same_(sh.getRange(1, LS.EDITABLE).getValue(), EDITABLE_HEADER)) {
       var last = Math.max(sh.getLastRow(), 2);
-      names = sh.getRange(2, LS.LOCKED, last - 1, 1).getValues().map(function (r) { return str_(r[0]); }).filter(String);
-    } else {
-      names = DEFAULT_LOCKED_FIELDS.slice();
+      return sh.getRange(2, LS.EDITABLE, last - 1, 1).getValues().map(function (r) { return str_(r[0]); }).filter(String);
     }
-    var customNames = {};
-    try { readCustomFields_().forEach(function (f) { customNames[customCol_(f.slot)] = f.name; }); } catch (e) { /* settings not built yet */ }
+    return DEFAULT_EDITABLE_FIELDS.slice();
+  });
+}
+
+/** Columns counsellors may edit: the Counsellor-Editable Fields list (contact, assignment and system columns never). */
+function editableCols_() {
+  return memo_('editableCols', function () {
+    var names = editableFieldNames_();
+    var cols = [];
+    var custom = [];
+    try { custom = readCustomFields_(); } catch (e) { /* settings not built */ }
     names.forEach(function (n) {
-      for (var c = 1; c <= LEAD_COLS; c++) {
-        if (same_(LEAD_HEADERS[c - 1], n) || (customNames[c] && same_(customNames[c], n))) cols.push(c);
+      if (same_(n, ALL_CUSTOM_FIELDS)) {
+        custom.forEach(function (f) { if (f.active) cols.push(customCol_(f.slot)); });
+        return;
       }
+      EDITABLE_CANDIDATE_COLS.forEach(function (c) { if (same_(LEAD_HEADERS[c - 1], n)) cols.push(c); });
+      custom.forEach(function (f) { if (f.active && same_(f.name, n)) cols.push(customCol_(f.slot)); });
     });
     return cols.filter(function (c, i) { return cols.indexOf(c) === i; }).sort(function (a, b) { return a - b; });
   });
 }
 
+function isEditableCol_(col) { return editableCols_().indexOf(col) >= 0; }
+
+/** Every column counsellors may NOT edit (grey). */
+function lockedCols_() {
+  return memo_('lockedCols', function () {
+    var ed = editableCols_();
+    var out = [];
+    for (var c = 1; c <= LEAD_COLS; c++) if (ed.indexOf(c) < 0) out.push(c);
+    return out;
+  });
+}
+
 function isLockedCol_(col) { return lockedCols_().indexOf(col) >= 0; }
+
+/** System-column correction window (Admin menu): {until: ms, by: email} or null. */
+function correctionWindow_() {
+  try {
+    var raw = PropertiesService.getDocumentProperties().getProperty(PROP.CORRECTION);
+    var o = raw ? JSON.parse(raw) : null;
+    return o && o.until > Date.now() ? o : null;
+  } catch (e) { return null; }
+}
 
 /** Groups sorted column numbers into [[first, last], ...] runs of adjacent columns. */
 function colRuns_(cols) {

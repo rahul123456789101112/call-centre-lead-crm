@@ -1,13 +1,14 @@
 /**
  * Web.gs
- * Counsellor web app ("portal"). Deploy as: Execute as = Me (the CRM owner), Who has access =
- * Anyone with a Google account. Sign-in goes through the separate identity app (/identity-app).
+ * OPTIONAL counsellor web app ("portal"). Counsellors normally work in the spreadsheet; the web app is an
+ * extra for those who should not open the spreadsheet at all. Deploy as: Execute as = Me (the CRM owner),
+ * Who has access = Anyone with a Google account. Sign-in goes through the separate identity app (/identity-app).
  * See docs/CONFIDENTIALITY.md and docs/SETUP.md.
  *
  * - Every request re-checks the signed-in user against the access rule: an ACTIVE counsellor in
  *   Counsellor Master or an email in Admin Emails. Nothing else (any email provider is fine).
  * - A counsellor only ever receives leads assigned to them; every check runs on the server.
- * - Only fields that are not in "Counsellor-Locked Fields" can be changed.
+ * - Only fields in "Counsellor-Editable Fields" can be changed, with the same rules as the sheet.
  * - Every list view, lead view, edit, follow-up, denied attempt and reported browser copy is
  *   written to the Access Log sheet with user and timestamp.
  * Because the app runs as the owner, the master spreadsheet can be shared with admins only.
@@ -270,7 +271,7 @@ function portalFieldMeta_() {
       key: key, col: c,
       label: cf ? (cf.name || defaultCustomName_(cf.slot)) : LEAD_HEADERS[c - 1],
       type: PORTAL_LIST_FIELDS[key] ? 'list' : PORTAL_DATE_FIELDS[key] ? 'date' : key === 'REMARKS' ? 'textarea' : 'text',
-      editable: !system && !isLockedCol_(c)
+      editable: !system && isEditableCol_(c)
     });
   }
   return out;
@@ -295,10 +296,10 @@ function portalInit(sid) {
     stages: getStageInfo_().activeStages.map(function (s) { return { name: s.name, subs: s.subs }; }),
     statuses: lists.statuses, priorities: lists.priorities, outcomes: lists.outcomes, sources: lists.sources,
     counsellors: activeCounsellorNames_(),
-    activityTypes: lists.activityTypes.filter(function (a) { return a.sidebar; }),
     closedStatuses: CLOSED_STATUSES,
-    rules: { requireRemarks: settings.requireRemarks, requireNextFu: settings.requireNextFu, maxBackdateDays: settings.maxBackdateDays },
-    today: todayKey_(), maxNextFu: addDaysKey_(todayKey_(), 365)
+    closingStages: [settings.autoSync ? settings.convertedStage : '', settings.autoSync ? settings.lostStage : ''].filter(String),
+    rules: { requireRemarks: settings.requireRemarks, requireNextFu: settings.requireNextFu, requireSubstage: settings.requireSubstage, maxRemarks: settings.maxRemarks },
+    today: todayKey_(), maxNextFu: addDaysKey_(todayKey_(), settings.maxFuDays)
   };
 }
 
@@ -377,78 +378,62 @@ function portalLeadPayload_(row) {
 }
 
 /**
- * Saves edits to allowed fields. changes: {fieldKey: value}. Locked/system fields are rejected on the
- * server even if the browser sends them.
+ * Saves edits to allowed fields with the same rules as the sheet. changes: {fieldKey: value}.
+ * Nothing is saved when any value is refused. Locked / system fields are refused on the server.
  */
 function portalSaveLead(sid, leadId, changes) {
   var u = portalUser_(sid);
-  var actor = { email: u.email, name: u.name, label: u.label };
+  var actor = { email: u.email, name: u.name, label: u.label, admin: false, counsellor: u.name };
   var meta = {};
   portalFieldMeta_().forEach(function (f) { meta[f.key] = f; });
-  var settings = getSettings_();
-  var stageInfo = getStageInfo_();
-  var lists = getLists_();
+  var env = validationEnv_();
   var lock = LockService.getDocumentLock();
-  if (!lock.tryLock(20000)) return { ok: false, errors: ['Another update is being saved. Please try again.'] };
+  if (!lock.tryLock(20000)) return { ok: false, errors: ['Lead CRM is busy saving another change. Please try again.'] };
   try {
+    processFollowUpQueue_();
     var sheet = getSheet_(SHEET.LEADS);
     var rowNum = findLeadRow_(sheet, leadId);
     if (!rowNum) return { ok: false, errors: ['Lead ' + leadId + ' was not found.'] };
     var row = sheet.getRange(rowNum, 1, 1, LEAD_COLS).getValues()[0];
+    var snap = parseSnapshot_(row[LC.SNAPSHOT - 1]) || parseSnapshot_(buildSnapshot_(row));
+    if (!snap.v) snap = upgradeSnapshot_(snap, row);
+    SNAP_COLS.forEach(function (c) { row[c - 1] = snapValue_(snap, c); });
     if (!u.admin && !same_(row[LC.OWNER - 1], u.name)) {
       logAccess_(u.email, ACCESS.DENIED, leadId, 'Tried to edit a lead assigned to someone else', 'Web app');
       return { ok: false, errors: ['Lead ' + leadId + ' is not assigned to you.'] };
     }
-    var before = parseSnapshot_(row[LC.SNAPSHOT - 1]) || readTracked_(row);
-    var errors = [], cols = [], diffs = [];
+    var errors = [], kept = [], diffs = [];
     var keys = Object.keys(changes || {});
-    // Apply the stage before the substage so the substage is validated against the new stage.
-    keys.sort(function (a, b) { return (a === 'STAGE' ? -1 : 0) - (b === 'STAGE' ? -1 : 0); });
+    var orderOf = function (k) { var i = ['STAGE', 'STATUS', 'SUBSTAGE', 'NEXT_FU'].indexOf(k); return i < 0 ? 10 : i; };
+    keys.sort(function (a, b) { return orderOf(a) - orderOf(b); });
+    if (keys.indexOf('STAGE') >= 0 && keys.indexOf('SUBSTAGE') < 0 && !same_(changes.STAGE, row[LC.STAGE - 1])) {
+      keys.splice(keys.indexOf('STAGE') + 1, 0, 'SUBSTAGE');
+      changes.SUBSTAGE = '';   // a new stage needs a new substage
+    }
     keys.forEach(function (key) {
       var f = meta[key];
       if (!f || !f.editable) { errors.push('"' + (f ? f.label : key) + '" cannot be changed here.'); return; }
-      var v = str_(changes[key]);
+      var raw = f.type === 'date' ? (str_(changes[key]) ? dateFromKey_(str_(changes[key])) || 'invalid' : '') : changes[key];
       var old = row[f.col - 1];
-      if (f.type === 'date') {
-        if (v && !dateFromKey_(v)) { errors.push(f.label + ': invalid date.'); return; }
-        if (key === 'LAST_CONTACT' && v > todayKey_()) { errors.push(f.label + ' cannot be in the future.'); return; }
-        if (toDateKey_(old) === v) return;
-        row[f.col - 1] = v ? dateFromKey_(v) : '';
-      } else {
-        if (key === 'STAGE' && v && !stageInfo.isActiveStage(v)) { errors.push('Stage "' + v + '" is not active.'); return; }
-        if (key === 'OWNER' && v && !isActiveCounsellor_(v)) { errors.push('"' + v + '" is not an active counsellor.'); return; }
-        var listFor = { PRIORITY: lists.priorities, OUTCOME: lists.outcomes, STATUS: lists.statuses }[key];
-        if (listFor && v && !listFor.some(function (x) { return same_(x, v); })) { errors.push(f.label + ': "' + v + '" is not a valid choice.'); return; }
-        if (v.length > 2000) { errors.push(f.label + ' is too long.'); return; }
-        if (same_(old, v) && str_(old) === v) return;
-        row[f.col - 1] = key === 'STAGE' ? stageInfo.canonicalStage(v) || v : safeText_(v);
-      }
-      cols.push(f.col);
-      diffs.push(f.label + ': "' + displayValue_(old) + '" -> "' + v + '"');
+      var chk = checkLeadValue_(f.col, raw, key === 'SUBSTAGE' && keys.indexOf('STAGE') >= 0 ? '' : old, row, env);
+      if (!chk.ok) { errors.push(chk.msg); return; }
+      if (cellKey_(chk.value) === cellKey_(old)) return;
+      row[f.col - 1] = chk.value;
+      kept.push(f.col);
+      diffs.push(f.label + ': "' + displayValue_(old) + '" -> "' + displayValue_(chk.value) + '"');
     });
-    var stageChanged = !same_(row[LC.STAGE - 1], before.s);
-    if (stageChanged && keys.indexOf('SUBSTAGE') < 0) { row[LC.SUBSTAGE - 1] = ''; cols.push(LC.SUBSTAGE); }
-    var sub = str_(row[LC.SUBSTAGE - 1]);
-    if (sub && !stageInfo.isActivePair(row[LC.STAGE - 1], sub)) errors.push('Substage "' + sub + '" does not belong to stage "' + str_(row[LC.STAGE - 1]) + '".');
-    if (sub) row[LC.SUBSTAGE - 1] = stageInfo.canonicalSub(row[LC.STAGE - 1], sub);
     if (errors.length) return { ok: false, errors: errors };
-    if (!cols.length) return { ok: true, unchanged: true, lead: portalLeadPayload_(row) };
-
+    if (!kept.length) return { ok: true, unchanged: true, lead: portalLeadPayload_(row) };
     var now = new Date();
-    row[LC.UPDATED_BY - 1] = actor.label;
-    row[LC.LAST_ACTIVITY - 1] = now;
-    var res = trackLeadChanges_(row, before, {
-      actor: actor, now: now, stageInfo: stageInfo, settings: settings,
-      statusExplicit: keys.indexOf('STATUS') >= 0, logNextFu: true, note: 'Via counsellor web app'
-    });
+    var fin = finishLeadChange_(row, snap, kept, actor, env, now, 'Via counsellor web app', null);
     row[LC.DQ_FLAGS - 1] = computeDqFlags_(row, buildDqEnv_(sheet));
-    writeRowCols_(sheet, rowNum, row, cols.concat(res.cols, [LC.UPDATED_BY, LC.LAST_ACTIVITY, LC.DQ_FLAGS, LC.SNAPSHOT]));
-    if (stageChanged || res.stageChanged) {
-      sheet.getRange(rowNum, LC.SUBSTAGE).setDataValidation(substageRuleFor_(row[LC.STAGE - 1], stageInfo, {}));
+    writeRowCols_(sheet, rowNum, row, kept.concat(fin.cols, [LC.DQ_FLAGS]));
+    if (kept.indexOf(LC.STAGE) >= 0) {
+      sheet.getRange(rowNum, LC.SUBSTAGE).setDataValidation(substageRuleFor_(row[LC.STAGE - 1], env.stageInfo, {}));
     }
-    if (res.entries.length) appendLogRows_(res.entries);
+    if (fin.entries.length) appendLogRows_(fin.entries);
     logAccess_(u.email, ACCESS.LEAD_UPDATED, leadId, diffs.join('; '), 'Web app');
-    return { ok: true, lead: portalLeadPayload_(row), messages: res.messages };
+    return { ok: true, lead: portalLeadPayload_(row), messages: fin.messages };
   } finally {
     lock.releaseLock();
   }
@@ -457,7 +442,9 @@ function portalSaveLead(sid, leadId, changes) {
 /** Logs a follow-up from the web app (counsellor = the signed-in user; own leads only). */
 function portalSubmitFollowUp(sid, p) {
   var u = portalUser_(sid);
-  var res = submitFollowUpAs_(p, { email: u.email, name: u.name, label: u.label }, {
+  var lock = LockService.getDocumentLock();
+  if (lock.tryLock(20000)) { try { processFollowUpQueue_(); } finally { lock.releaseLock(); } }
+  var res = submitFollowUpAs_(p, { email: u.email, name: u.name, label: u.label, counsellor: u.name, admin: false }, {
     source: 'counsellor web app',
     forceCounsellor: u.name || null,
     ownerOnly: u.admin ? null : u.name

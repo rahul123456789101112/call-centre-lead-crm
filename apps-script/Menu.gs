@@ -1,6 +1,6 @@
 /**
  * Menu.gs
- * The "Lead CRM" custom menu, quick views, identity helper, help and health check.
+ * The "Lead CRM" menu (everyday items at the top, everything else under Admin), help and health check.
  */
 
 function onOpen(e) {
@@ -8,37 +8,35 @@ function onOpen(e) {
   try { CacheService.getScriptCache().put('OPK', Session.getTemporaryActiveUserKey(), 60); } catch (err) { /* ignore */ }
   var ui = SpreadsheetApp.getUi();
   ui.createMenu('Lead CRM')
-    .addItem('Log Follow-Up...', 'showFollowUpSidebar')
-    .addItem('Go to Lead...', 'menuGoToLead')
+    .addItem('Log follow-up', 'showFollowUpSidebar')
+    .addItem('My overdue follow-ups', 'showMyFollowUps')
+    .addItem('Refresh dashboard', 'refreshDashboard')
+    .addItem('Add leads from Lead Entry (admins)', 'addLeadsFromEntry')
     .addSeparator()
-    .addSubMenu(ui.createMenu('Views (changes the shared filter)')
-      .addItem('My follow-ups due (today + overdue)', 'viewMyDueFollowUps')
-      .addItem('All overdue follow-ups', 'viewOverdue')
-      .addItem('Follow-ups due today', 'viewDueToday')
-      .addItem('Unassigned leads', 'viewUnassigned')
-      .addItem('Unworked leads (no activity)', 'viewUnworked')
-      .addItem('Leads with data-quality flags', 'viewDataQuality')
-      .addSeparator()
-      .addItem('Clear view filters', 'viewClear'))
-    .addItem('Refresh Dashboard', 'refreshDashboard')
-    .addItem('Open counsellor web app', 'showWebAppLink')
-    .addItem('Add custom field...', 'addCustomField')
-    .addItem('Remove custom field...', 'removeCustomField')
-    .addItem('Refresh substage dropdowns', 'refreshAllSubstageValidations')
-    .addItem('Identify me', 'identifyMe')
-    .addSeparator()
+    .addItem('Help', 'showHelp')
     .addSubMenu(ui.createMenu('Admin')
+      .addItem('Show admin sheets', 'showAdminSheets')
+      .addItem('Hide admin sheets', 'hideAdminSheets')
+      .addSeparator()
+      .addItem('Delete lead(s)...', 'deleteLeads')
+      .addItem('Restore deleted lead...', 'restoreDeletedLead')
+      .addItem('Purge deleted lead permanently...', 'purgeDeletedLead')
+      .addSeparator()
+      .addItem('Allow system-column correction for 10 minutes', 'allowSystemCorrection')
+      .addItem('Add custom field...', 'addCustomField')
+      .addItem('Remove custom field...', 'removeCustomField')
+      .addItem('Re-check all lead rows', 'recheckAllLeads')
+      .addItem('Recalculate data-quality flags', 'recalculateDataQuality')
+      .addItem('Refresh substage dropdowns', 'refreshAllSubstageValidations')
+      .addItem('Reapply protections', 'reapplyProtections')
+      .addSeparator()
       .addItem('Set up / repair workbook (10,000 rows)', 'setupWorkbook')
       .addItem('Quick test setup (1,000 rows)', 'setupWorkbookQuickTest')
       .addItem('Restart setup from the first stage', 'restartSetup')
-      .addItem('Process imported / pasted leads', 'processAllLeads')
       .addItem('Extend Lead Management by 5,000 rows', 'extendLeadSheet')
-      .addItem('Reapply protections', 'reapplyProtections')
       .addItem('Recalculate ID counters', 'recalculateIdCounters')
       .addSeparator()
-      .addItem('Use installable edit trigger + strict locking (default)', 'useInstallableEditTrigger')
-      .addItem('Use legacy simple edit trigger (warning-only locking)', 'useSimpleEditTrigger')
-      .addItem('Recalculate data-quality flags', 'recalculateDataQuality')
+      .addItem('Counsellor web app link (optional)', 'showWebAppLink')
       .addItem('Web app sign-in setup', 'setupWebAppSignIn')
       .addItem('Set counsellor web app URL', 'setWebAppUrl')
       .addSeparator()
@@ -47,99 +45,32 @@ function onOpen(e) {
       .addItem('Send reminders now (test)', 'sendRemindersNow')
       .addSeparator()
       .addItem('Run health check', 'runHealthCheck'))
-    .addItem('Help', 'showHelp')
     .addToUi();
 }
 
-/* ---------- Navigation ---------- */
+/* ---------- System-column correction window ---------- */
 
-function menuGoToLead() {
-  var ui = SpreadsheetApp.getUi();
-  var r = ui.prompt(CRM_TITLE, 'Lead ID or mobile number:', ui.ButtonSet.OK_CANCEL);
-  if (r.getSelectedButton() !== ui.Button.OK) return;
-  var q = str_(r.getResponseText());
-  var sheet = getSheet_(SHEET.LEADS);
-  var row = findLeadRow_(sheet, q);
-  if (!row && q) {
-    var last = lastLeadRow_(sheet);
-    var hit = last >= 2 ? sheet.getRange(2, LC.MOBILE, last - 1, 1).createTextFinder(q).matchEntireCell(true).findNext() : null;
-    if (hit) row = hit.getRow();
+/** Admin > Allow system-column correction for 10 minutes (for genuine fixes; every correction is logged). */
+function allowSystemCorrection() {
+  var email = requireAdmin_();
+  var until = Date.now() + 10 * 60000;
+  PropertiesService.getDocumentProperties().setProperty(PROP.CORRECTION, JSON.stringify({ until: until, by: email }));
+  var blank = new Array(LEAD_COLS);
+  for (var b = 0; b < LEAD_COLS; b++) blank[b] = '';
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(30000);
+  try {
+    appendLogRows_([buildLogEntry_({
+      row: blank, time: new Date(), type: ACT.CORRECTION_OPENED, category: CATEGORY.SYSTEM, counsellor: 'System', updatedBy: email,
+      field: 'Automatic columns', newValue: 'Admins may correct them until ' + displayDateTime_(new Date(until)),
+      remarks: 'Opened with Admin > Allow system-column correction for 10 minutes'
+    })]);
+  } finally {
+    lock.releaseLock();
   }
-  if (!row) { ui.alert(CRM_TITLE, 'No lead found for "' + q + '".', ui.ButtonSet.OK); return; }
-  ss_().setActiveSheet(sheet);
-  sheet.setActiveSelection(sheet.getRange(row, LC.ID, 1, LC.NEXT_FU));
-}
-
-/* ---------- Views (basic filter on Lead Management) ---------- */
-
-function leadFilter_() {
-  registerCurrentUser_();
-  var sheet = getSheet_(SHEET.LEADS);
-  var f = sheet.getFilter() || sheet.getRange(1, 1, sheet.getMaxRows(), LEAD_COLS).createFilter();
-  for (var c = 1; c <= LEAD_COLS; c++) {
-    if (f.getColumnFilterCriteria(c)) f.removeColumnFilterCriteria(c);
-  }
-  ss_().setActiveSheet(sheet);
-  return f;
-}
-
-function formulaCriteria_(formula) {
-  return SpreadsheetApp.newFilterCriteria().whenFormulaSatisfied(lcf_(formula)).build();
-}
-
-var OPEN_FILTER_FORMULA = '=AND(${STATUS}2<>"Converted",${STATUS}2<>"Lost",${STATUS}2<>"Duplicate")';
-
-function viewMyDueFollowUps() {
-  var actor = registerCurrentUser_();
-  if (!actor.name) {
-    alert_('Your Google account is not mapped to a counsellor. Ask an administrator to add your email (' +
-      (actor.email || 'not visible') + ') in Counsellor Master.');
-    return;
-  }
-  var f = leadFilter_();
-  f.setColumnFilterCriteria(LC.OWNER, SpreadsheetApp.newFilterCriteria().whenTextEqualTo(actor.name).build());
-  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)<=TODAY())'));
-  f.setColumnFilterCriteria(LC.STATUS, formulaCriteria_(OPEN_FILTER_FORMULA));
-  toast_('Showing follow-ups due today or overdue for ' + actor.name + '.');
-}
-
-function viewOverdue() {
-  var f = leadFilter_();
-  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER(${NEXT_FU}2),${NEXT_FU}2<TODAY())'));
-  f.setColumnFilterCriteria(LC.STATUS, formulaCriteria_(OPEN_FILTER_FORMULA));
-  toast_('Showing overdue follow-ups (open leads).');
-}
-
-function viewDueToday() {
-  var f = leadFilter_();
-  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)=TODAY())'));
-  f.setColumnFilterCriteria(LC.STATUS, formulaCriteria_(OPEN_FILTER_FORMULA));
-  toast_('Showing follow-ups due today.');
-}
-
-function viewUnassigned() {
-  var f = leadFilter_();
-  f.setColumnFilterCriteria(LC.ID, SpreadsheetApp.newFilterCriteria().whenCellNotEmpty().build());
-  f.setColumnFilterCriteria(LC.OWNER, SpreadsheetApp.newFilterCriteria().whenCellEmpty().build());
-  toast_('Showing leads without an assigned counsellor.');
-}
-
-function viewUnworked() {
-  var f = leadFilter_();
-  f.setColumnFilterCriteria(LC.ID, SpreadsheetApp.newFilterCriteria().whenCellNotEmpty().build());
-  f.setColumnFilterCriteria(LC.ACTIVITY_TOTAL, SpreadsheetApp.newFilterCriteria().whenNumberEqualTo(0).build());
-  toast_('Showing leads that have never had a logged activity.');
-}
-
-function viewDataQuality() {
-  var f = leadFilter_();
-  f.setColumnFilterCriteria(LC.DQ_FLAGS, SpreadsheetApp.newFilterCriteria().whenCellNotEmpty().build());
-  toast_('Showing leads with data-quality flags (see column AH).');
-}
-
-function viewClear() {
-  leadFilter_();
-  toast_('Filters cleared.');
+  logAccess_(email, 'System Correction Allowed', '', 'For 10 minutes', 'Spreadsheet');
+  notify_('For the next 10 minutes, admins may correct automatic columns (Last Updated By, dates, Previous Counsellor...) in Lead Management. ' +
+    'Every correction is logged as "System Field Corrected". Lead ID, Follow-Up Count, Total Activities, Data Quality Flags and the snapshot still cannot be changed.');
 }
 
 /* ---------- Counsellor web app ---------- */
@@ -153,32 +84,20 @@ function showWebAppLink() {
   SpreadsheetApp.getUi().showModalDialog(html, CRM_TITLE);
 }
 
-/* ---------- Identity ---------- */
-
-function identifyMe() {
-  var actor = registerCurrentUser_();
-  var msg;
-  if (actor.name) msg = 'You are recognised as counsellor "' + actor.name + '" (' + actor.email + ').\nYour edits will show this name in Last Updated By.';
-  else if (actor.email) msg = 'You are signed in as ' + actor.email + ', which is not in Counsellor Master.\nEdits will show your email. An administrator can add it to Counsellor Master > Email ID.';
-  else msg = 'Google did not share your email address with the script (account or domain policy).\nEdits will show "Unidentified user"; in the follow-up form, select your name manually.';
-  msg += '\n\nCRM administrator: ' + (isAdmin_(actor.email) ? 'yes' : 'no') + '.';
-  alert_(msg);
-}
-
 /* ---------- Help & health check ---------- */
 
 function showHelp() {
   var html = HtmlService.createHtmlOutput(
-    '<div style="font-family:Roboto,Arial;font-size:13px;line-height:1.5">' +
-    '<h3 style="color:#1F3864;margin:0 0 8px">Lead CRM - quick guide</h3>' +
-    '<b>Add a lead:</b> type the name, mobile and other details in the next empty row of Lead Management. The Lead ID, created date and defaults appear automatically.<br>' +
-    '<b>Stage &amp; substage:</b> pick the Lead Stage first; the Substage dropdown then shows only that stage\'s substages.<br>' +
-    '<b>Record a call / message:</b> select the lead row and use <i>Lead CRM &gt; Log Follow-Up</i>. Every entry is kept in Follow-Up Log.<br>' +
-    '<b>Colours:</b> red = overdue follow-up, yellow = due today, blue = upcoming, green row = converted, grey row = lost / duplicate.<br>' +
-    '<b>Do not type</b> in grey/green header columns (system or formula columns).<br>' +
-    '<b>Dashboard:</b> choose the period and counsellor in the yellow cells.<br><br>' +
-    'Full documentation: docs/SETUP.md, ADMIN.md, TESTING.md, TROUBLESHOOTING.md, LIMITATIONS.md in the project repository.' +
-    '</div>').setWidth(460).setHeight(320);
+    '<div style="font-family:Roboto,Arial;font-size:13px;line-height:1.55">' +
+    '<h3 style="color:#1F3864;margin:0 0 8px">Lead CRM - quick help</h3>' +
+    '<b>Your calls today:</b> Lead CRM &gt; My overdue follow-ups.<br>' +
+    '<b>After a call:</b> select the lead row, Lead CRM &gt; Log follow-up, fill it in, Save.<br>' +
+    '<b>White cells</b> you may change on your own leads. <b>Grey cells</b> are automatic or admin-only.<br>' +
+    '<b>Red Lead ID:</b> something is missing. Column AH says what.<br>' +
+    '<b>Dates:</b> double-click the cell and pick from the calendar.<br>' +
+    '<b>New leads:</b> only admins add them, in Lead Entry.<br><br>' +
+    'Wrong changes are undone automatically with a short message. The Field Guide sheet explains every column.' +
+    '</div>').setWidth(460).setHeight(300);
   SpreadsheetApp.getUi().showModalDialog(html, CRM_TITLE + ' help');
 }
 
@@ -195,23 +114,28 @@ function runHealthCheck() {
     var cfs = readCustomFields_().filter(function (f) { return f.active; });
     ok(true, 'Active custom fields: ' + (cfs.map(function (f) { return f.name + ' (' + colLetter_(customCol_(f.slot)) + ')'; }).join(', ') || 'none'));
     ok(/^=/.test(leads.getRange(1, LC.FU_COUNT).getFormula()), 'Follow-Up Count header formula present (L1)');
-    ok(/^=/.test(leads.getRange(1, LC.DQ_FLAGS).getFormula()), 'Data Quality header formula present (AH1)');
     var target = parseInt(PropertiesService.getDocumentProperties().getProperty(SETUP_ROWS_KEY), 10) || LEAD_DATA_ROWS;
     ok(leads.getMaxRows() - 1 >= target, 'Lead Management has ' + (leads.getMaxRows() - 1) + ' data rows (setup target ' + target + ')');
     ok(!!leads.getFilter(), 'Filter enabled on Lead Management');
+    ok(leads.getProtections(SpreadsheetApp.ProtectionType.SHEET).some(function (p) { return /^CRM:/.test(p.getDescription() || ''); }), 'Lead Management sheet is protected (counsellors edit white cells only)');
   }
   Object.keys(NAMED).forEach(function (k) { ok(!!ss.getRangeByName(NAMED[k].name), 'Named range ' + NAMED[k].name); });
   var triggers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
   ok(triggers.indexOf('onChangeInstallable') >= 0, 'onChange trigger installed (refreshes dropdowns after sort/insert)');
-  var mode = getEditMode_();
-  ok(mode === 'simple' || triggers.indexOf('onEditInstallable') >= 0, 'Edit tracking mode: ' + mode + (mode === 'installable' ? ' (strict locking)' : ' (warning-only locking)'));
+  ok(triggers.indexOf('onEditInstallable') >= 0, 'Edit guard trigger installed (onEditInstallable)');
+  ok(triggers.indexOf('processQueuedFollowUps') >= 0, 'Follow-up queue trigger installed (every minute)');
+  ok(checkLeadColumns_(false).ok, 'Lead Management columns are in the expected order');
+  ok(!correctionWindow_(), correctionWindow_() ? 'System-column correction window is OPEN' : 'No correction window open');
+  var queued = PropertiesService.getScriptProperties().getKeys().filter(function (k) { return k.indexOf(PROP.QUEUE_PREFIX) === 0; }).length;
+  ok(queued === 0, 'Follow-ups waiting in the queue: ' + queued);
   ok(triggers.indexOf('scheduledMaintenance') >= 0, 'Hourly maintenance trigger (data quality + dashboard)');
   ok(!!getWebAppUrl_(), 'Counsellor web app URL: ' + (getWebAppUrl_() || 'not deployed'));
   ok(!!getIdentityUrl_() && !!PropertiesService.getScriptProperties().getProperty(PROP.IDENTITY_SECRET),
     'Web app sign-in app: ' + (getIdentityUrl_() || 'not configured (Admin > Web app sign-in setup)'));
   var mapped = PropertiesService.getScriptProperties().getKeys().filter(function (k) { return k.indexOf(PROP.USER_KEY_PREFIX) === 0; }).length;
   ok(mapped > 0, 'Registered editor identities (for sheet edits): ' + mapped);
-  ok(true, 'Counsellor-locked columns: ' + lockedCols_().map(function (c) { return colLetter_(c); }).join(', '));
+  ok(true, 'Counsellor-editable columns: ' + editableCols_().map(function (c) { return colLetter_(c) + ' ' + leadLabel_(c); }).join(', '));
+  ok(ADMIN_SHEETS.every(function (n) { var x = ss.getSheetByName(n); return !x || x.isSheetHidden(); }), 'Admin sheets hidden from counsellors');
   var props = PropertiesService.getDocumentProperties();
   var pending = props.getProperty(SETUP_STATE_KEY);
   ok(!pending, pending ? 'Setup unfinished - run Set up / repair workbook again (' + pending + ')' : 'Setup completed');

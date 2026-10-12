@@ -50,8 +50,20 @@ class Sheet {
   newChart() { const sh = this; const b = chain(); return new Proxy({}, { get(t, k) { if (k === 'build') return () => ({ chart: true }); return (...a) => this.proxyRef; }, set() { return true; } }) && (function () { const o = {}; const p = new Proxy(o, { get(t, k) { if (k === 'build') return () => ({ chart: true }); if (k === 'addRange') return (r) => { if (r.r < 1 || r.r + r.nr - 1 > sh.maxRows) throw new Error('chart range out of bounds'); return p; }; return () => p; } }); return p; })(); }
   insertChart(c) { this.charts.push(c); }
   getBandings() { return []; }
-  getProtections() { return this.prot.slice(); }
-  protect() { const p = new Protection(this); this.prot.push(p); return p; }
+  getProtections(type) { return this.prot.filter(p => !type || p.type === type); }
+  protect(type) { const p = new Protection(this, type || 'SHEET'); this.prot.push(p); return p; }
+  hideSheet() { this.isHidden = true; return this; } showSheet() { this.isHidden = false; return this; } isSheetHidden() { return !!this.isHidden; }
+  // Row / column deletion and insertion shift the stored cells like Sheets does.
+  shift(axis, at, n) {   // n > 0 insert n before `at`; n < 0 delete -n starting at `at`
+    const move = obj => { const out = {}; for (const k in obj) { let [r, c] = k.split(':').map(Number); let x = axis === 'r' ? r : c;
+      if (n < 0 && x >= at && x < at - n) continue; if (x >= at) x += n; out[axis === 'r' ? x + ':' + c : r + ':' + x] = obj[k]; } return out; };
+    this.v = move(this.v); this.f = move(this.f); this.dv = move(this.dv);
+    if (axis === 'c') { const h = new Set(); this.hidden.forEach(c => { if (n < 0 && c >= at && c < at - n) return; h.add(c >= at ? c + n : c); }); this.hidden = h; this.maxCols += n; }
+    else this.maxRows += n;
+  }
+  deleteRow(r) { this.shift('r', r, -1); } deleteRows(r, n) { this.shift('r', r, -n); }
+  deleteColumn(c) { this.shift('c', c, -1); } deleteColumns(c, n) { this.shift('c', c, -n); }
+  insertColumnsBefore(c, n) { this.shift('c', c, n); }
   getSheetProtection() { return null; }
   setConditionalFormatRules(r) { this.cf = r; }
   clearConditionalFormatRules() { this.cf = []; }
@@ -72,7 +84,7 @@ class Sheet {
   setActiveSelection() {} getActiveCell() { return this.getRange(this.ss.activeRow || 2, 1); }
 }
 class Protection {
-  constructor(sh) { this.sh = sh; this.desc = ''; this.editors = []; }
+  constructor(sh, type) { this.sh = sh; this.type = type; this.desc = ''; this.editors = []; }
   setDescription(d) { this.desc = d; return this; } getDescription() { return this.desc; }
   setWarningOnly(w) { this.warn = w; return this; }
   addEditors(e) { this.editors.push(...e.map(x => ({ getEmail: () => x }))); return this; }
@@ -115,7 +127,7 @@ class Range {
   setDataValidations(rules) { if (rules.length !== this.nr) throw new Error('setDataValidations dims ' + rules.length + ' vs ' + this.nr); rules.forEach((row, i) => row.forEach((rule, j) => { this.sh.dv[this.sh.key(this.r + i, this.c + j)] = rule; })); return this; }
   getDataValidation() { return this.sh.dv[this.sh.key(this.r, this.c)] || null; }
   clearDataValidations() { return this; }
-  protect() { return this.sh.protect(); }
+  protect() { return this.sh.protect('RANGE'); }
   createFilter() { this.sh.filter = makeFilter(); return this.sh.filter; }
   applyRowBanding() { return chain(); }
   getNextDataCell() { // UP from bottom

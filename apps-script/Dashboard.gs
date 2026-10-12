@@ -84,10 +84,10 @@ function setupDashboard_(sh) {
     sh.getRange(row + 2, col).setValue(k[2]);
     sh.getRange(row, col).setNote(k[2]);
   });
-  [7, 11].forEach(function (r) { sh.setRowHeight(r, 24); sh.setRowHeight(r + 1, 40); sh.setRowHeight(r + 2, 34); });
+  [7, 11, 15].forEach(function (r) { sh.setRowHeight(r, 24); sh.setRowHeight(r + 1, 40); sh.setRowHeight(r + 2, 34); });
 
   var layout = { cards: cards };
-  var row = 16;
+  var row = 20;
   var A = section_(sh, row, 'A. Stage-Wise Report', ['Lead Stage', 'Total Current Leads', 'Leads Worked (Period)',
     'Follow-Ups Completed (Period)', 'Overdue Follow-Ups', 'Converted Leads', '% of Total Leads'], DASH_SIZES.stage);
   sh.getRange(A.data, 8, A.n, 1).setNumberFormat('0.0%');
@@ -99,7 +99,8 @@ function setupDashboard_(sh) {
 
   var C = section_(sh, row, 'C. Counsellor-Wise Performance', ['Counsellor Name', 'Assigned Leads', 'Unique Leads Worked (Period)',
     'Follow-Ups Completed (Period)', 'Pending Follow-Ups', 'Overdue Follow-Ups', 'Conversions', 'Conversion Rate',
-    'Leads Not Contacted', 'Avg Activities per Lead'], DASH_SIZES.counsellor);
+    'Leads Not Contacted', 'Avg Activities per Lead', 'Incomplete Leads'], DASH_SIZES.counsellor);
+  sh.getRange(C.data, 12, C.n, 1).setFontColor(COLORS.red).setFontWeight('bold');
   sh.getRange(C.data, 9, C.n, 1).setNumberFormat('0.0%');
   sh.getRange(C.data, 11, C.n, 1).setNumberFormat('0.0');
   layout.counsellor = C; row = C.end + 2;
@@ -155,7 +156,8 @@ var DASH_KPIS = [
   ['lost', 'Lost Leads', 'Leads with Lead Status = Lost (current).', '#,##0'],
   ['notContacted', 'Leads Not Contacted', 'Open leads with zero Contact activities ever.', '#,##0'],
   ['noActivity', 'Leads With No Activity', 'Leads with no Contact or Record Update entry in the log ever (unworked).', '#,##0'],
-  ['rate', 'Conversion Rate', 'Converted Leads / Total Leads.', '0.0%']
+  ['rate', 'Conversion Rate', 'Converted Leads / Total Leads.', '0.0%'],
+  ['incomplete', 'Incomplete Leads', 'Open leads missing a required field (red Lead ID). Their sheet updates do not count as worked until completed.', '#,##0']
 ];
 
 /** Section title + header row; returns {title, data, n, end}. */
@@ -233,6 +235,15 @@ function computeDashboard_(input) {
     var t = ms(l[LG.TIME - 1]);
     return t >= fromMs && t < toEndMs;
   });
+  // Leads that are incomplete right now: their Record Update entries do not count as "worked" until they
+  // are completed (follow-ups saved with the form always count: the form only saves complete leads).
+  var incompleteIds = {};
+  input.leads.forEach(function (r) {
+    if (str_(r[LC.ID - 1]) && /^Incomplete/.test(str_(r[LC.DQ_FLAGS - 1]))) incompleteIds[lower(r[LC.ID - 1])] = true;
+  });
+  logP = logP.filter(function (l) {
+    return !(str_(l[LG.CATEGORY - 1]) === CATEGORY.RECORD && incompleteIds[lower(l[LG.LEAD_ID - 1])]);
+  });
   var logPF = logP.filter(function (l) { return all || same_(l[LG.COUNSELLOR - 1], input.selected); });
   var uniq = function (rows, pred) {
     var set = {};
@@ -264,6 +275,8 @@ function computeDashboard_(input) {
   k.notContacted = count(leadsF, function (r) { return isOpen(r) && !contactCount[lower(r[LC.ID - 1])]; });
   k.noActivity = count(leadsF, function (r) { return !activityCount[lower(r[LC.ID - 1])]; });
   k.rate = k.total ? k.converted / k.total : 0;
+  var isIncomplete = function (r) { return isOpen(r) && !!incompleteIds[lower(r[LC.ID - 1])]; };
+  k.incomplete = count(leadsF, isIncomplete);
 
   // A. Stage-wise (all stages in Stage Master order)
   var stageRows = input.stageInfo.list.slice(0, DASH_SIZES.stage).map(function (s) {
@@ -297,7 +310,7 @@ function computeDashboard_(input) {
     return [n, mine.length, worked, lg.length, count(mine, isPending), count(mine, isOverdue), conv,
       mine.length ? conv / mine.length : 0,
       count(mine, function (r) { return isOpen(r) && !contactCount[lower(r[LC.ID - 1])]; }),
-      worked ? lg.length / worked : 0];
+      worked ? lg.length / worked : 0, count(mine, isIncomplete)];
   });
 
   // F. Ageing (open leads by age since creation; due/overdue follow-ups by days overdue)
@@ -355,7 +368,7 @@ function computeDashboard_(input) {
     unassigned: unassigned.slice(0, DASH_SIZES.exceptions).map(function (r) { return [r[LC.ID - 1], r[LC.NAME - 1], r[LC.MOBILE - 1], r[LC.CREATED - 1]]; }),
     unworked: unworked.slice(0, DASH_SIZES.exceptions).map(function (r) { return [r[LC.ID - 1], r[LC.NAME - 1], r[LC.OWNER - 1], r[LC.CREATED - 1]]; }),
     exceptionSummary: 'Unassigned (open): ' + unassigned.length + '   |   Unworked: ' + unworked.length +
-      '   |   Leads with data-quality flags: ' + flagged,
+      '   |   Incomplete: ' + k.incomplete + '   |   Leads with data-quality flags: ' + flagged,
     daily: dailyRows, pending: pending.slice(0, DASH_SIZES.pending), pendingTotal: pending.length
   };
 }
@@ -376,7 +389,7 @@ function refreshDashboardData_() {
 
   var leadsSheet = getSheet_(SHEET.LEADS);
   var last = lastLeadRow_(leadsSheet);
-  var leads = last >= 2 ? leadsSheet.getRange(2, 1, last - 1, LEAD_COLS).getValues() : [];
+  var leads = last >= 2 ? leadsSheet.getRange(2, 1, last - 1, LEAD_COLS - 1).getValues() : [];   // snapshot not needed
   var logSheet = getSheet_(SHEET.LOG);
   var lastLog = logSheet.getLastRow();
   var log = lastLog >= 2 ? logSheet.getRange(2, 1, lastLog - 1, LOG_COLS).getValues() : [];
@@ -401,7 +414,7 @@ function refreshDashboardData_() {
   });
   writeBlock_(sh, layout.stage, 2, 7, res.stage);
   writeBlock_(sh, layout.substage, 2, 5, res.substage);
-  writeBlock_(sh, layout.counsellor, 2, 10, res.counsellor);
+  writeBlock_(sh, layout.counsellor, 2, 11, res.counsellor);
   writeBlock_(sh, layout.ageing, 2, 5, res.ageing);
   writeBlock_(sh, layout.ageing, 8, 2, res.status);
   writeBlock_(sh, layout.ageing, 11, 2, res.source);
@@ -476,15 +489,23 @@ function refreshDashboardCharts_() {
   refreshDashboardData_();
 }
 
-/** Menu: Lead CRM > Refresh Dashboard. */
+/**
+ * Menu: Lead CRM > Refresh dashboard. Admins refresh at once; for counsellors (who cannot write the
+ * protected Dashboard) the owner's every-minute trigger does it.
+ */
 function refreshDashboard() {
-  registerCurrentUser_();
+  var actor = registerCurrentUser_();
   var sh = getSheet_(SHEET.DASHBOARD);
+  ss_().setActiveSheet(sh);
+  if (!actor.admin) {
+    CacheService.getDocumentCache().put('DASH_REFRESH_REQUESTED', '1', 600);
+    toast_('The dashboard will refresh within a minute.');
+    return;
+  }
   try {
     refreshDashboardData_();
-    ss_().setActiveSheet(sh);
     toast_('Dashboard refreshed.');
   } catch (e) {
-    toast_('Dashboard could not be refreshed (' + e.message + '). Only CRM administrators can refresh it.', 10);
+    toast_('Dashboard could not be refreshed: ' + e.message, 10);
   }
 }

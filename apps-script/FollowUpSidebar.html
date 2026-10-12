@@ -4,112 +4,82 @@
   <base target="_top">
   <meta charset="utf-8">
   <style>
-    :root { --navy:#1F3864; --blue:#2E75B6; --red:#C0392B; --green:#117A65; --muted:#5F6B76; --line:#D5D8DC; --bg:#F4F6F9; }
+    :root { --navy:#1F3864; --blue:#2E75B6; --red:#C0392B; --amber:#7D6608; --muted:#5F6B76; --line:#D5D8DC; --bg:#F4F6F9; }
     * { box-sizing: border-box; }
     body { font-family: Roboto, Arial, sans-serif; font-size: 13px; color: #202124; margin: 0; padding: 12px; }
     h2 { font-size: 15px; color: var(--navy); margin: 0 0 4px; }
-    .who { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
-    .who.warn { color: var(--red); }
+    .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+    .tabs button { flex: 1; padding: 7px; border: 1px solid var(--line); border-radius: 16px; background: #fff; cursor: pointer; font: inherit; }
+    .tabs button.on { background: var(--navy); color: #fff; border-color: var(--navy); }
     label { display: block; font-weight: 600; font-size: 12px; margin: 10px 0 3px; color: #3C4043; }
     label .req { color: var(--red); }
-    input, select, textarea { width: 100%; padding: 6px 7px; border: 1px solid var(--line); border-radius: 4px; font: inherit; background: #fff; }
-    input:focus, select:focus, textarea:focus { outline: 2px solid #AED6F1; border-color: var(--blue); }
+    input, select, textarea { width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 4px; font: inherit; background: #fff; }
     textarea { min-height: 70px; resize: vertical; }
     .row { display: flex; gap: 6px; }
     .row > * { flex: 1; }
     button { padding: 7px 12px; border: 1px solid var(--line); border-radius: 4px; background: #fff; cursor: pointer; font: inherit; }
-    button.primary { background: var(--navy); border-color: var(--navy); color: #fff; font-weight: 600; width: 100%; margin-top: 14px; padding: 9px; }
+    button.primary { background: var(--navy); border-color: var(--navy); color: #fff; font-weight: 600; width: 100%; margin-top: 14px; padding: 10px; font-size: 14px; }
     button:disabled { opacity: .55; cursor: wait; }
-    .card { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; margin-top: 10px; }
-    .card .title { font-weight: 700; color: var(--navy); }
-    .kv { display: grid; grid-template-columns: 95px 1fr; gap: 2px 6px; margin-top: 6px; font-size: 12px; }
-    .kv span:nth-child(odd) { color: var(--muted); }
+    .card { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; margin-top: 8px; }
+    .card .t { font-weight: 700; color: var(--navy); }
+    .item { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-top: 6px; cursor: pointer; }
+    .item:hover { border-color: var(--blue); }
+    .item .s { font-size: 12px; color: var(--muted); }
+    .over { color: var(--red); font-weight: 700; }
+    .due { color: var(--amber); font-weight: 700; }
+    .miss { color: #fff; background: var(--red); border-radius: 3px; padding: 0 4px; font-size: 11px; }
     .msg { margin-top: 10px; padding: 8px 10px; border-radius: 4px; font-size: 12px; display: none; }
     .msg.ok { display: block; background: #D5F5E3; color: #145A32; }
     .msg.err { display: block; background: #FADBD8; color: #78281F; }
     .msg.info { display: block; background: #EBF5FB; color: #1B4F72; }
-    .hist { margin-top: 8px; font-size: 11px; }
-    .hist div { border-top: 1px dashed var(--line); padding: 4px 0; }
-    .hist .t { color: var(--muted); }
-    .pick { margin-top: 6px; }
-    .pick a { display: block; color: var(--blue); cursor: pointer; padding: 2px 0; }
     .hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
-    fieldset { border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px 10px; margin: 12px 0 0; }
-    legend { font-size: 11px; color: var(--muted); padding: 0 4px; }
+    .hist { margin-top: 6px; font-size: 11px; }
+    .hist div { border-top: 1px dashed var(--line); padding: 3px 0; }
+    .pick a { display: block; color: var(--blue); cursor: pointer; padding: 2px 0; }
   </style>
 </head>
 <body>
-  <h2>Log Follow-Up</h2>
-  <div id="who" class="who">Loading...</div>
-
-  <label for="leadQuery">Lead ID or mobile number <span class="req">*</span></label>
-  <div class="row">
-    <input id="leadQuery" placeholder="e.g. LD-000123">
-    <button type="button" id="findBtn" style="flex:0 0 auto">Find</button>
+  <div class="tabs">
+    <button id="tabList">My follow-ups</button>
+    <button id="tabForm">Log follow-up</button>
   </div>
-  <button type="button" id="selBtn" style="margin-top:6px;width:100%">Use selected row in Lead Management</button>
-  <div id="leadMsg" class="msg"></div>
-  <div id="leadCard" class="card" style="display:none"></div>
+  <div id="top" class="msg"></div>
 
-  <form id="form" autocomplete="off" style="display:none">
-    <label for="counsellor">Counsellor <span class="req">*</span></label>
-    <select id="counsellor" required></select>
-    <div class="hint" id="counsellorHint"></div>
+  <div id="listView" style="display:none">
+    <h2 id="listTitle">My follow-ups</h2>
+    <div class="hint">Red label = something is missing. Click a lead to open it and log the call.</div>
+    <div id="list"></div>
+  </div>
 
+  <div id="formView" style="display:none">
+    <label for="leadQuery">Lead</label>
     <div class="row">
-      <div>
-        <label for="activityType">Activity type <span class="req">*</span></label>
-        <select id="activityType" required></select>
-      </div>
-      <div>
-        <label for="outcome">Contact outcome <span class="req">*</span></label>
-        <select id="outcome" required></select>
-      </div>
+      <input id="leadQuery" placeholder="Lead ID or mobile number">
+      <button type="button" id="findBtn" style="flex:0 0 auto">Find</button>
     </div>
+    <button type="button" id="selBtn" style="margin-top:6px;width:100%">Use the selected row</button>
+    <div id="leadMsg" class="msg"></div>
+    <div id="leadCard" class="card" style="display:none"></div>
 
-    <label for="activityTime">Activity date &amp; time</label>
-    <input type="datetime-local" id="activityTime">
-    <div class="hint">Leave as is for "now". Past dates are limited by the administrator.</div>
-
-    <fieldset>
-      <legend>Update lead (optional)</legend>
-      <div class="row">
-        <div>
-          <label for="stage">Lead stage</label>
-          <select id="stage"></select>
-        </div>
-        <div>
-          <label for="substage">Substage</label>
-          <select id="substage"></select>
-        </div>
-      </div>
-      <div class="row">
-        <div>
-          <label for="status">Lead status</label>
-          <select id="status"></select>
-        </div>
-        <div>
-          <label for="priority">Priority</label>
-          <select id="priority"></select>
-        </div>
-      </div>
-    </fieldset>
-
-    <label for="nextFollowUp">Next follow-up date <span class="req" id="nextReq">*</span></label>
-    <input type="date" id="nextFollowUp">
-
-    <label for="remarks">Remarks <span class="req" id="remarksReq">*</span></label>
-    <textarea id="remarks" maxlength="2000" placeholder="What happened on this call / message?"></textarea>
-
-    <button type="submit" class="primary" id="saveBtn">Save follow-up</button>
-  </form>
-  <div id="formMsg" class="msg"></div>
+    <form id="form" autocomplete="off" style="display:none">
+      <label for="outcome">Outcome of the call <span class="req">*</span></label>
+      <select id="outcome"></select>
+      <label for="stage">Stage <span class="req">*</span></label>
+      <select id="stage"></select>
+      <label for="substage">Substage <span class="req" id="subReq">*</span></label>
+      <select id="substage"></select>
+      <label for="nextFollowUp">Next follow-up date <span class="req" id="nextReq">*</span></label>
+      <input type="date" id="nextFollowUp">
+      <label for="remarks">Remarks <span class="req" id="remarksReq">*</span></label>
+      <textarea id="remarks" placeholder="What happened on this call?"></textarea>
+      <button type="submit" class="primary" id="saveBtn">Save</button>
+    </form>
+    <div id="formMsg" class="msg"></div>
+  </div>
 
 <script>
-  var ctx = null;
-  var lead = null;
-  var submissionId = newId();
-  var busy = false;
+  var MODE = '<?= mode ?>';
+  var ctx = null, lead = null, submissionId = newId(), busy = false;
 
   function $(id) { return document.getElementById(id); }
   function newId() { return 'S' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
@@ -118,75 +88,75 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
-  function show(id, cls, text) { var el = $(id); el.className = 'msg ' + cls; el.innerHTML = text; }
+  function show(id, cls, html) { $(id).className = 'msg ' + cls; $(id).innerHTML = html; }
   function hide(id) { $(id).className = 'msg'; $(id).innerHTML = ''; }
-  function fill(sel, values, blankLabel, selected) {
-    var html = blankLabel !== null ? '<option value="">' + esc(blankLabel) + '</option>' : '';
-    values.forEach(function (v) {
-      html += '<option value="' + esc(v) + '"' + (v === selected ? ' selected' : '') + '>' + esc(v) + '</option>';
-    });
+  function fill(sel, values, blank, selected) {
+    var html = blank !== null ? '<option value="">' + esc(blank) + '</option>' : '';
+    values.forEach(function (v) { html += '<option value="' + esc(v) + '"' + (v === selected ? ' selected' : '') + '>' + esc(v) + '</option>'; });
     sel.innerHTML = html;
   }
   function stageSubs(name) {
     var s = (ctx.stages || []).filter(function (x) { return x.name === name; })[0];
     return s ? s.subs : [];
   }
-  function fail(err) {
-    busy = false;
-    $('saveBtn').disabled = false;
-    show('formMsg', 'err', 'Error: ' + esc(err && err.message ? err.message : err) + '<br>Your entry was not lost - press Save again.');
-  }
+  function err(e) { return esc(e && e.message ? e.message : e); }
 
-  /** Counsellors (strict protection): show the counsellor web app, which saves as the CRM owner. */
-  function renderWebApp(c) {
-    document.body.innerHTML = '';
-    if (!c.webAppUrl) {
-      document.body.innerHTML = '<h2>Log Follow-Up</h2><div class="msg err">The counsellor web app has not been deployed yet. ' +
-        'Ask a CRM administrator to deploy it (docs/SETUP.md, "Counsellor web app").</div>';
-      return;
-    }
-    // Sign-in needs a full browser tab (Google's permission screen cannot run inside a sidebar).
-    document.body.innerHTML = '<h2>Log Follow-Up</h2><p>Counsellors log follow-ups in the counsellor web app.</p>' +
-      '<p><a class="btn" href="' + esc(c.webAppUrl) + '" target="_blank" rel="noopener" ' +
-      'style="display:inline-block;background:#1F3864;color:#fff;padding:9px 14px;border-radius:4px;text-decoration:none;font-weight:600">' +
-      'Open the counsellor web app</a></p><p class="hint">It opens in a new tab and signs you in with your Google account.</p>';
+  function setMode(m) {
+    MODE = m;
+    $('tabList').className = m === 'list' ? 'on' : '';
+    $('tabForm').className = m === 'form' ? 'on' : '';
+    $('listView').style.display = m === 'list' ? '' : 'none';
+    $('formView').style.display = m === 'form' ? '' : 'none';
+    if (m === 'list') loadList();
   }
 
   function init(c) {
-    if (c.useWebApp) { renderWebApp(c); return; }
     ctx = c;
-    var who = $('who');
-    if (c.actor.name) {
-      who.textContent = 'Signed in as ' + c.actor.name + ' (' + c.actor.email + ')';
-    } else if (c.actor.email) {
-      who.textContent = 'Signed in as ' + c.actor.email + ' - not mapped to a counsellor (ask an admin to add this email in Counsellor Master). Select your name below.';
-      who.className = 'who warn';
-    } else {
-      who.textContent = 'Your Google account email is not visible to the script. Select your name below.';
-      who.className = 'who warn';
-    }
-    fill($('counsellor'), c.counsellors, '- select -', c.actor.name || '');
-    fill($('activityType'), c.activityTypes.map(function (a) { return a.type; }), '- select -', '');
-    fill($('outcome'), c.outcomes, '- select -', '');
-    fill($('stage'), c.stages.map(function (s) { return s.name; }), null, '');
-    fill($('status'), c.statuses, null, '');
-    fill($('priority'), c.priorities, '(no change)', '');
+    if (!c.canSave) { show('top', 'err', esc(c.message)); }
+    fill($('outcome'), c.outcomes, '- choose -', '');
     $('remarksReq').style.display = c.rules.requireRemarks ? '' : 'none';
-    $('activityTime').value = c.nowLocal;
-    $('activityTime').dataset.touched = '';
+    $('remarks').maxLength = c.rules.maxRemarks;
     $('nextFollowUp').min = c.today;
     $('nextFollowUp').max = c.maxNextFu;
-    if (c.selectedLeadId) { $('leadQuery').value = c.selectedLeadId; findLead(); }
+    setMode(MODE === 'list' ? 'list' : 'form');
+    if (MODE !== 'list' && c.selectedLeadId) { $('leadQuery').value = c.selectedLeadId; findLead(); }
   }
 
+  /* ---------- My follow-ups ---------- */
+  function loadList() {
+    $('list').innerHTML = '<div class="hint">Loading...</div>';
+    google.script.run.withSuccessHandler(showList).withFailureHandler(function (e) {
+      $('list').innerHTML = '<div class="msg err" style="display:block">' + err(e) + '</div>';
+    }).getMyFollowUps();
+  }
+  function showList(res) {
+    if (!res.ok) { $('list').innerHTML = '<div class="msg err" style="display:block">' + esc(res.message) + '</div>'; return; }
+    $('listTitle').textContent = (res.everyone ? 'All due follow-ups' : 'My follow-ups') + ' (' + res.total + ')';
+    if (!res.items.length) { $('list').innerHTML = '<div class="msg ok" style="display:block">Nothing due today and nothing missing. Well done.</div>'; return; }
+    $('list').innerHTML = res.items.map(function (l) {
+      var when = l.next ? (l.overdue ? '<span class="over">Overdue since ' + esc(l.next) + '</span>' : '<span class="due">Due today</span>') : '';
+      return '<div class="item" data-id="' + esc(l.id) + '"><b>' + esc(l.id) + '</b> - ' + esc(l.name || '(no name)') +
+        (l.incomplete ? ' <span class="miss">Missing: ' + esc(l.missing) + '</span>' : '') +
+        '<div class="s">' + esc(l.mobile) + ' | ' + esc(l.stage) + (res.everyone ? ' | ' + esc(l.owner || 'unassigned') : '') + (when ? ' | ' + when : '') + '</div></div>';
+    }).join('');
+    Array.prototype.forEach.call(document.querySelectorAll('.item'), function (el) {
+      el.onclick = function () {
+        var id = el.getAttribute('data-id');
+        google.script.run.goToLead(id);
+        setMode('form');
+        $('leadQuery').value = id;
+        findLead();
+      };
+    });
+  }
+
+  /* ---------- Log follow-up ---------- */
   function findLead() {
     var q = $('leadQuery').value.trim();
-    hide('leadMsg');
-    if (!q) { show('leadMsg', 'err', 'Enter a Lead ID or mobile number.'); return; }
-    show('leadMsg', 'info', 'Searching...');
-    google.script.run.withSuccessHandler(onLead).withFailureHandler(function (e) {
-      show('leadMsg', 'err', esc(e && e.message ? e.message : e));
-    }).getLeadForSidebar(q);
+    hide('leadMsg'); hide('formMsg');
+    if (!q) { show('leadMsg', 'err', 'Select the lead row in Lead Management, then press "Use the selected row".'); return; }
+    show('leadMsg', 'info', 'Looking for the lead...');
+    google.script.run.withSuccessHandler(onLead).withFailureHandler(function (e) { show('leadMsg', 'err', err(e)); }).getLeadForSidebar(q);
   }
 
   function onLead(res) {
@@ -214,61 +184,56 @@
     lead = l;
     $('leadQuery').value = l.id;
     var hist = (l.recent || []).map(function (h) {
-      return '<div><span class="t">' + esc(h.time) + ' - ' + esc(h.type) + (h.outcome ? ' / ' + esc(h.outcome) : '') +
-        ' - ' + esc(h.counsellor) + '</span><br>' + esc(h.remarks) + '</div>';
+      return '<div>' + esc(h.time) + ' - ' + esc(h.type) + (h.outcome ? ' / ' + esc(h.outcome) : '') + ' - ' + esc(h.counsellor) + '<br>' + esc(h.remarks) + '</div>';
     }).join('');
-    $('leadCard').innerHTML = '<div class="title">' + esc(l.id) + ' - ' + esc(l.name || '(no name)') + '</div>' +
-      '<div class="kv"><span>Mobile</span><span>' + esc(l.mobile) + '</span>' +
-      '<span>Counsellor</span><span>' + esc(l.owner || 'Unassigned') + '</span>' +
-      '<span>Stage</span><span>' + esc(l.stage) + (l.substage ? ' / ' + esc(l.substage) : '') + '</span>' +
-      '<span>Status</span><span>' + esc(l.status) + '</span>' +
-      '<span>Next follow-up</span><span>' + esc(l.nextFollowUp || '-') + '</span>' +
-      '<span>Follow-ups</span><span>' + esc(l.followUpCount) + '</span>' +
-      '<span>Last activity</span><span>' + esc(l.lastActivity || '-') + (l.lastUpdatedBy ? ' by ' + esc(l.lastUpdatedBy) : '') + '</span></div>' +
-      (hist ? '<div class="hist"><b>Recent activity</b>' + hist + '</div>' : '');
+    $('leadCard').innerHTML = '<div class="t">' + esc(l.id) + ' - ' + esc(l.name || '(no name)') + '</div>' +
+      '<div>' + esc(l.mobile) + ' | ' + esc(l.owner || 'Unassigned') + '</div>' +
+      '<div>' + esc(l.stage) + (l.substage ? ' / ' + esc(l.substage) : '') + ' | ' + esc(l.status) + ' | next: ' + esc(l.nextFollowUp || '-') + '</div>' +
+      (l.flags ? '<div style="color:#C0392B">' + esc(l.flags) + '</div>' : '') +
+      (hist ? '<div class="hist"><b>Recent</b>' + hist + '</div>' : '');
     $('leadCard').style.display = 'block';
+    if (!l.mine) {
+      $('form').style.display = 'none';
+      show('formMsg', 'err', 'This lead is assigned to ' + esc(l.owner || 'nobody') + '. You can only log follow-ups for your own leads.');
+      return;
+    }
+    if (!ctx.canSave) { $('form').style.display = 'none'; return; }
     $('form').style.display = 'block';
-
-    var stageNames = ctx.stages.map(function (s) { return s.name; });
-    var stages = stageNames.slice();
+    var stages = ctx.stages.map(function (s) { return s.name; });
     if (l.stage && stages.indexOf(l.stage) < 0) stages.unshift(l.stage);
-    fill($('stage'), stages, l.stage ? null : '- select -', l.stage);
+    fill($('stage'), stages, l.stage ? null : '- choose -', l.stage);
     fillSubstages(l.substage);
-    var statuses = ctx.statuses.slice();
-    if (l.status && statuses.indexOf(l.status) < 0) statuses.unshift(l.status);
-    fill($('status'), statuses, l.status ? null : '- select -', l.status);
-    $('priority').value = '';
-    if (!$('counsellor').value && l.owner && ctx.counsellors.indexOf(l.owner) >= 0) $('counsellor').value = l.owner;
+    $('outcome').value = '';
     $('nextFollowUp').value = '';
-    updateNextRequired();
+    $('remarks').value = '';
+    updateRequired();
   }
 
   function fillSubstages(selected) {
     var subs = stageSubs($('stage').value);
-    var list = subs.slice();
-    if (selected && list.indexOf(selected) < 0 && lead && $('stage').value === lead.stage) list.unshift(selected);
-    fill($('substage'), list, subs.length ? '- select -' : '(none for this stage)', selected || '');
-    $('substage').disabled = !subs.length && !selected;
+    fill($('substage'), subs, subs.length ? '- choose -' : '(none for this stage)', subs.indexOf(selected) >= 0 ? selected : '');
+    $('substage').disabled = !subs.length;
+    $('subReq').style.display = subs.length && ctx.rules.requireSubstage ? '' : 'none';
   }
 
-  function updateNextRequired() {
-    var closed = ctx.closedStatuses.indexOf($('status').value) >= 0;
-    var required = ctx.rules.requireNextFu && !closed;
-    $('nextReq').style.display = required ? '' : 'none';
-    return required;
+  function nextRequired() {
+    var closing = ctx.closingStages.indexOf($('stage').value) >= 0 ||
+      (['Converted', 'Lost', 'Duplicate'].indexOf(lead.status) >= 0 && $('stage').value === lead.stage);
+    return ctx.rules.requireNextFu && !closing;
   }
+  function updateRequired() { $('nextReq').style.display = nextRequired() ? '' : 'none'; }
 
   function validate() {
     var errs = [];
-    if (!lead) errs.push('Find a lead first.');
-    if (!$('counsellor').value) errs.push('Select the counsellor.');
-    if (!$('activityType').value) errs.push('Select the activity type.');
-    if (!$('outcome').value) errs.push('Select the contact outcome.');
-    if (ctx.rules.requireRemarks && !$('remarks').value.trim()) errs.push('Enter remarks.');
-    if (stageSubs($('stage').value).length && !$('substage').value) errs.push('Select a substage for the chosen stage.');
+    if (!lead) errs.push('Choose a lead first.');
+    if (!$('outcome').value) errs.push('Choose the outcome of the call.');
+    if (!$('stage').value) errs.push('Choose the stage.');
+    if (!$('substage').disabled && ctx.rules.requireSubstage && !$('substage').value) errs.push('Choose a substage.');
     var next = $('nextFollowUp').value;
-    if (updateNextRequired() && !next) errs.push('Enter the next follow-up date (required while the lead is open).');
+    if (nextRequired() && !next) errs.push('Choose the next follow-up date.');
     if (next && next < ctx.today) errs.push('Next follow-up date cannot be in the past.');
+    if (next && next > ctx.maxNextFu) errs.push('Next follow-up date is too far ahead.');
+    if (ctx.rules.requireRemarks && !$('remarks').value.trim()) errs.push('Write a short remark.');
     return errs;
   }
 
@@ -277,62 +242,51 @@
     if (busy) return;
     hide('formMsg');
     var errs = validate();
-    if (errs.length) { show('formMsg', 'err', errs.map(esc).join('<br>')); return; }
+    if (errs.length) { show('formMsg', 'err', '<b>Not saved yet:</b><br>' + errs.map(esc).join('<br>')); return; }
     busy = true;
     $('saveBtn').disabled = true;
     show('formMsg', 'info', 'Saving...');
-    var payload = {
-      submissionId: submissionId,
-      leadId: lead.id,
-      counsellor: $('counsellor').value,
-      activityType: $('activityType').value,
-      outcome: $('outcome').value,
-      // Untouched = "now" on the server (the pre-filled value may be stale if the sidebar stayed open).
-      activityTime: $('activityTime').dataset.touched ? $('activityTime').value : '',
-      stage: $('stage').value,
-      substage: $('substage').value,
-      status: $('status').value,
-      priority: $('priority').value,
-      nextFollowUp: $('nextFollowUp').value,
+    google.script.run.withSuccessHandler(onSaved).withFailureHandler(function (e) {
+      busy = false; $('saveBtn').disabled = false;
+      show('formMsg', 'err', 'Not saved: ' + err(e) + '<br>Your entry is still here. Press Save again.');
+    }).submitFollowUp({
+      submissionId: submissionId, leadId: lead.id, outcome: $('outcome').value, stage: $('stage').value,
+      substage: $('substage').disabled ? '' : $('substage').value, nextFollowUp: $('nextFollowUp').value,
       remarks: $('remarks').value.trim()
-    };
-    google.script.run.withSuccessHandler(onSaved).withFailureHandler(fail).submitFollowUp(payload);
+    });
   }
 
   function onSaved(res) {
     busy = false;
     $('saveBtn').disabled = false;
     if (!res.ok) {
-      show('formMsg', 'err', (res.errors || ['Not saved.']).map(esc).join('<br>'));
+      show('formMsg', 'err', '<b>Not saved:</b><br>' + (res.errors || ['Please try again.']).map(esc).join('<br>'));
       if (res.duplicate) submissionId = newId();
       return;
     }
     submissionId = newId();
-    show('formMsg', 'ok', 'Saved as ' + esc(res.activityId) + '.' +
-      (res.messages && res.messages.length ? '<br>' + res.messages.map(esc).join('<br>') : ''));
-    $('remarks').value = '';
-    $('outcome').value = '';
-    $('activityType').value = '';
-    $('activityTime').dataset.touched = '';
-    renderLead(res.lead);
+    var keep = res.lead;
+    renderLead(keep);
+    show('formMsg', 'ok', 'Saved.' + (res.queued ? ' The history and counts update within a minute.' : '') +
+      ' <a href="#" id="backList">Back to my follow-ups</a>');
+    $('backList').onclick = function (e) { e.preventDefault(); setMode('list'); };
   }
 
+  $('tabList').onclick = function () { setMode('list'); };
+  $('tabForm').onclick = function () { setMode('form'); };
   $('findBtn').onclick = findLead;
   $('leadQuery').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); findLead(); } };
   $('selBtn').onclick = function () {
     google.script.run.withSuccessHandler(function (id) {
-      if (!id) { show('leadMsg', 'err', 'Select a lead row on the Lead Management sheet first.'); return; }
+      if (!id) { show('leadMsg', 'err', 'First click a lead row in Lead Management.'); return; }
       $('leadQuery').value = id; findLead();
     }).getSelectedLeadId();
   };
-  $('activityTime').oninput = function () { this.dataset.touched = '1'; };
-  $('stage').onchange = function () { fillSubstages(''); };
-  $('status').onchange = updateNextRequired;
+  $('stage').onchange = function () { fillSubstages(''); updateRequired(); };
   $('form').onsubmit = submit;
 
   google.script.run.withSuccessHandler(init).withFailureHandler(function (e) {
-    $('who').textContent = 'Could not load: ' + (e && e.message ? e.message : e);
-    $('who').className = 'who warn';
+    show('top', 'err', 'Could not load: ' + err(e));
   }).getFollowUpContext();
 </script>
 </body>

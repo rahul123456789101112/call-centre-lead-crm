@@ -1,27 +1,30 @@
 /**
  * Triggers.gs
- * Edit handling: Lead IDs, fixed timestamps, dependent stage/substage dropdowns,
- * stage-change validation, duplicate checks, data-quality flags and the audit trail.
+ * The edit guard for Lead Management, plus the other edit, change, open and time triggers.
  *
- * Identity (personal Google accounts): Google does not give the owner's installable trigger the
- * editor's email. The simple trigger therefore caches the editor's temporary user key for each edit
- * (rememberEditor_), and the installable trigger maps it to the email the person registered by using
- * the Lead CRM menu at least once (see Config.gs > getActor_ and docs/SETUP.md section 5).
+ * Counsellors are not expected to read or obey anything, so every edit is checked AFTER it happens and
+ * anything that is not allowed is put back automatically:
+ *  - system / formula columns: nobody may change them (Google protection never blocks the owner, so the
+ *    guard restores the previous value, shows "This field is filled automatically" and logs the attempt);
+ *  - contact / assignment columns: admins only (strict protection for counsellors; audited for admins);
+ *  - counsellor-editable columns: only on the counsellor's own leads, and only valid values
+ *    (wrong dates, junk, pasted text that is not in a dropdown list...);
+ *  - rows without a Lead ID: nothing may be typed there (new leads come from Lead Entry).
+ * The reference for "previous value" is the hidden Audit Snapshot column (AI), which holds the last
+ * accepted value of every column. It works for typing, pasting, clearing, fill-down and undo.
  *
  * Two triggers fire for every edit:
- *  - onEdit(e) (simple, runs as the editor, starts fastest) does ONLY the stage-change fast path:
- *    clear the row's substage and set its new dropdown. No logging, no lock, no other reads.
- *  - onEditInstallable(e) (installable, created by setup, runs as the owner) does everything else:
- *    IDs, timestamps, audit trail, data-quality flags. Because it runs as the owner it can write to
- *    columns that are STRICTLY protected against counsellors.
- * Legacy "simple" mode (Admin menu) lets onEdit do the full work instead, with warning-only protection.
+ *  - onEdit(e) (simple, runs as the editor, starts fastest): the stage -> substage fast path, and it hands
+ *    the editor's temporary user key to the installable trigger (identity for personal Google accounts);
+ *  - onEditInstallable(e) (installable, created by setup, runs as the owner): the guard, audit trail,
+ *    timestamps and data-quality flags. Running as the owner lets it write to locked columns.
  */
 
 /* ================================================================== */
 /* Entry points                                                        */
 /* ================================================================== */
 
-/** Simple trigger: minimal stage-change path first, full handling only in legacy simple mode. */
+/** Simple trigger: stage-change fast path and identity hand-off only. */
 function onEdit(e) {
   if (!e || !e.range) return;
   try {
@@ -29,21 +32,19 @@ function onEdit(e) {
   } catch (err) {
     console.warn('fastStageChange_: ' + (err && err.message ? err.message : err));
   }
-  rememberEditor_(e);   // identity hand-off for the installable trigger (personal Google accounts)
-  if (getEditMode_() === 'simple') handleEdit_(e);
+  rememberEditor_(e);
 }
 
 /** Installable trigger (created by setup, runs as the owner). */
 function onEditInstallable(e) {
   if (!e || !e.range) return;
-  if (getEditMode_() !== 'installable') return;
   handleEdit_(e);
 }
 
 /**
  * The very first reaction to a Lead Stage change: clear Lead Substage and set the new stage's
  * dropdown for the edited row(s). Uses the cached stage map and the event values, so a single-cell
- * change costs two writes and no sheet reads. Audit logging happens later in the installable trigger.
+ * change costs two writes and no sheet reads. Checks and logging happen later in the installable trigger.
  */
 function fastStageChange_(e) {
   var range = e.range;
@@ -60,7 +61,7 @@ function fastStageChange_(e) {
       var s = map[key];
       ruleCache[key] = s && s.subs.length
         ? SpreadsheetApp.newDataValidation().requireValueInList(s.subs, true).setAllowInvalid(false)
-          .setHelpText('Substages of "' + s.name + '" (from Stage Master).').build()
+          .setHelpText('Substages of "' + s.name + '".').build()
         : noSubstageRule_(s ? s.name : str_(stage));
     }
     return ruleCache[key];
@@ -83,7 +84,7 @@ function fastStageChange_(e) {
   var rules = [], changed = false;
   for (var i = 0; i < n; i++) {
     var snap = parseSnapshot_(snaps[i][0]);
-    if (!snap || !same_(snap.s, stages[i][0])) { subs[i][0] = ''; changed = true; }
+    if (snap && !same_(snap.s, stages[i][0])) { subs[i][0] = ''; changed = true; }
     rules.push([ruleFor(stages[i][0])]);
   }
   if (changed) sheet.getRange(r1, LC.SUBSTAGE, n, 1).setValues(subs);
@@ -108,12 +109,14 @@ function onOpenInstallable(e) {
   } catch (err) { /* never block opening */ }
 }
 
-/** Hourly time trigger (created by setup): data-quality flags (overdue changes daily) + dashboard. */
+/** Hourly time trigger (created by setup): date rules, data-quality flags, dashboard. */
 function scheduledMaintenance() {
   var lock = LockService.getDocumentLock();
   if (!lock.tryLock(60000)) return;
   try {
     clearMemo_();
+    processFollowUpQueue_();
+    refreshDateValidations_(false);
     refreshDataQuality_();
   } finally {
     lock.releaseLock();
@@ -122,19 +125,29 @@ function scheduledMaintenance() {
 }
 
 /**
- * Installable onChange trigger created by setup. Sorting, inserting or deleting rows can leave
- * per-row substage dropdowns out of step with the Lead Stage, so they are rebuilt (throttled).
+ * Installable onChange trigger created by setup.
+ *  - Inserted / deleted / moved columns on Lead Management: empty inserted columns are removed; anything
+ *    else pauses the CRM and tells admins to undo.
+ *  - Rows deleted directly (not with Admin > Delete lead(s)) are recorded.
+ *  - Sorting, inserting or deleting rows can leave per-row substage dropdowns out of step: rebuilt (throttled).
  */
 function onChangeInstallable(e) {
   var type = e && e.changeType;
-  if (['OTHER', 'INSERT_ROW', 'REMOVE_ROW'].indexOf(type) < 0) return;
-  var cache = CacheService.getDocumentCache();
-  if (cache.get(PROP.LAST_SUBSTAGE_REFRESH)) return;
-  cache.put(PROP.LAST_SUBSTAGE_REFRESH, '1', 30);
+  if (['INSERT_COLUMN', 'REMOVE_COLUMN', 'OTHER', 'INSERT_ROW', 'REMOVE_ROW'].indexOf(type) < 0) return;
   var lock = LockService.getDocumentLock();
   if (!lock.tryLock(20000)) return;
   try {
-    refreshAllSubstageValidations_();
+    clearMemo_();
+    var layout = checkLeadColumns_(true);
+    if (!layout.ok) return;
+    if (type === 'REMOVE_ROW') checkDeletedRows_();
+    if (['OTHER', 'INSERT_ROW', 'REMOVE_ROW'].indexOf(type) >= 0) {
+      var cache = CacheService.getDocumentCache();
+      if (!cache.get(PROP.LAST_SUBSTAGE_REFRESH)) {
+        cache.put(PROP.LAST_SUBSTAGE_REFRESH, '1', 30);
+        refreshAllSubstageValidations_();
+      }
+    }
   } finally {
     lock.releaseLock();
   }
@@ -146,6 +159,7 @@ function handleEdit_(e) {
   try {
     switch (sheet.getName()) {
       case SHEET.LEADS: onLeadSheetEdit_(e, sheet, range); break;
+      case SHEET.ENTRY: onLeadEntryEdit_(e, sheet, range); break;
       case SHEET.STAGES: onStageMasterEdit_(e, sheet, range); break;
       case SHEET.SETTINGS: onSettingsEdit_(range); break;
       case SHEET.COUNSELLORS: onCounsellorMasterEdit_(e, sheet, range); break;
@@ -155,200 +169,447 @@ function handleEdit_(e) {
     }
   } catch (err) {
     console.error(err && err.stack ? err.stack : err);
-    toast_('Lead CRM automation error: ' + (err && err.message ? err.message : err), 10);
+    toast_('Lead CRM could not check this change: ' + (err && err.message ? err.message : err), 10);
   }
 }
 
 /* ================================================================== */
-/* Lead Management                                                     */
+/* Lead Management: the edit guard                                     */
 /* ================================================================== */
 
 function onLeadSheetEdit_(e, sheet, range) {
-  var r1 = Math.max(range.getRow(), 2);
-  var r2 = range.getLastRow();
-  var c1 = range.getColumn();
-  var c2 = range.getLastColumn();
-  if (range.getRow() === 1 && c2 >= LC.CUSTOM_FIRST && c1 <= LC.CUSTOM_LAST) onCustomHeaderEdit_(sheet, range);
-  if (r2 < 2 || c1 > LEAD_COLS) return;
-  var n = r2 - r1 + 1;
-
-  // Typing into a formula-output column blocks the ARRAYFORMULA in the header: undo it.
-  var formulaHit = LEAD_FORMULA_COLS.filter(function (c) { return c >= c1 && c <= c2; });
-  if (formulaHit.length) {
-    formulaHit.forEach(function (c) { sheet.getRange(r1, c, n, 1).clearContent(); });
-    toast_('"' + LEAD_HEADERS[formulaHit[0] - 1] + '" is calculated automatically; your entry was removed.');
-    if (c1 === c2) return;
+  var r1 = range.getRow(), r2 = range.getLastRow();
+  var c1 = range.getColumn(), c2 = range.getLastColumn();
+  if (r1 === 1) {
+    onLeadHeaderEdit_(sheet, c1, c2);
+    if (r2 === 1) return;
+    r1 = 2;
   }
-
-  var single = range.getNumRows() === 1 && range.getNumColumns() === 1;
-  if (single && LEAD_SYSTEM_COLS.indexOf(c1) >= 0 && c1 !== LC.ID) {
-    toast_('"' + LEAD_HEADERS[c1 - 1] + '" is maintained by the system and will be overwritten by the next tracked activity.');
-  }
-
+  if (c1 > LEAD_COLS) return;   // columns beyond AI are removed by setup / the column check
   var lock = LockService.getDocumentLock();
-  if (!lock.tryLock(15000)) {
-    toast_('The CRM is busy saving another change. Your edit is saved; IDs and tracking will be applied on the next edit of this row (or via Admin > Process imported / pasted leads).', 10);
+  if (!lock.tryLock(60000)) {
+    toast_('Lead CRM is very busy. If your change looks wrong, do it again in a minute.', 10);
     return;
   }
   try {
-    var res = processLeadRows_(sheet, r1, n, {
-      c1: c1, c2: c2, single: single, oldValue: e.oldValue, actor: getActor_(e), source: 'edit'
+    if (!checkLeadColumns_(false).ok) {
+      toast_('Lead CRM is paused because columns of Lead Management were moved or deleted. An admin must undo that (Ctrl+Z) first.', 15);
+      return;
+    }
+    processFollowUpQueue_();
+    var single = range.getNumRows() === 1 && range.getNumColumns() === 1;
+    var res = guardLeadRows_(sheet, r1, r2 - r1 + 1, c1, Math.min(c2, LEAD_COLS), getActor_(e), {
+      note: single ? 'Edited in sheet' : 'Pasted / filled in sheet'
     });
     if (res.messages.length) {
       var extra = res.messages.length > 2 ? ' (+' + (res.messages.length - 2) + ' more)' : '';
-      toast_(res.messages.slice(0, 2).join(' ') + extra, 10);
+      toast_(res.messages.slice(0, 2).join(' ') + extra, 12);
     }
   } finally {
     lock.releaseLock();
   }
 }
 
-/** True when any column in c1..c2 is a column the user maintains (not system / formula). */
-function touchesUserCols_(c1, c2) {
-  for (var c = c1; c <= Math.min(c2, LEAD_COLS); c++) {
-    if (LEAD_SYSTEM_COLS.indexOf(c) < 0 && LEAD_FORMULA_COLS.indexOf(c) < 0) return true;
+/** Header row (admins / owner only: it is protected). Custom field names may be renamed; the rest is restored. */
+function onLeadHeaderEdit_(sheet, c1, c2) {
+  if (c2 >= LC.CUSTOM_FIRST && c1 <= LC.CUSTOM_LAST) onCustomHeaderEdit_(sheet, { getColumn: function () { return c1; }, getLastColumn: function () { return c2; } });
+  var fixed = false;
+  for (var c = Math.max(c1, 1); c <= Math.min(c2, LEAD_COLS); c++) {
+    if (isCustomCol_(c)) continue;
+    fixed = true;
   }
-  return false;
-}
-
-/** A row is a lead when any user-maintained field has a value. */
-function hasLeadData_(row) {
-  for (var c = LC.NAME; c <= LEAD_COLS; c++) {
-    if (LEAD_SYSTEM_COLS.indexOf(c) >= 0 || LEAD_FORMULA_COLS.indexOf(c) >= 0) continue;
-    if (str_(row[c - 1]) !== '') return true;
+  if (fixed) {
+    restoreLeadHeaders_(sheet);
+    toast_('Column names in Lead Management are fixed. The original name was put back.');
   }
-  return false;
-}
-
-/** Lead IDs (lower-case) of every row OUTSIDE the block being processed. */
-function buildIdIndex_(sheet, startRow, n) {
-  var idx = {};
-  var last = lastLeadRow_(sheet);
-  if (last < 2) return idx;
-  sheet.getRange(2, LC.ID, last - 1, 1).getValues().forEach(function (r, i) {
-    var row = i + 2;
-    if (row >= startRow && row < startRow + n) return;
-    var id = str_(r[0]).toLowerCase();
-    if (id) idx[id] = true;
-  });
-  return idx;
 }
 
 /**
- * Core processor for a block of Lead Management rows. Used by onEdit and by
- * Admin > Process imported / pasted leads. Caller MUST hold the document lock.
- * ctx: {c1, c2, single, oldValue, actor, source: 'edit' | 'bulk'}
+ * Checks (and repairs) one block of Lead Management rows after an edit. Caller holds the document lock.
+ * actor: from getActor_ ({email, label, admin, counsellor}). opts: {note}
+ * Returns {messages, reverted}.
  */
-function processLeadRows_(sheet, startRow, n, ctx) {
-  var settings = getSettings_();
-  var stageInfo = getStageInfo_();
+function guardLeadRows_(sheet, startRow, n, c1, c2, actor, opts) {
+  opts = opts || {};
+  var env = validationEnv_();
+  var settings = env.settings;
   var now = new Date();
-  var actor = ctx.actor || getActor_();
-  var isEdit = ctx.source === 'edit';
   var data = sheet.getRange(startRow, 1, n, LEAD_COLS).getValues();
+  var formulas = sheet.getRange(startRow, c1, n, c2 - c1 + 1).getFormulas();
+  var cols = [];
+  for (var c = c1; c <= c2; c++) cols.push(c);
+  if (c1 <= LC.STAGE && c2 >= LC.STAGE && cols.indexOf(LC.SUBSTAGE) < 0) cols.push(LC.SUBSTAGE);   // fast path may have cleared it
+
   var changed = {};
   var mark = function (i, col) {
-    var c = changed[col];
-    if (!c) changed[col] = [i, i];
-    else { if (i < c[0]) c[0] = i; if (i > c[1]) c[1] = i; }
+    var x = changed[col];
+    if (!x) changed[col] = [i, i];
+    else { if (i < x[0]) x[0] = i; if (i > x[1]) x[1] = i; }
   };
-  var entries = [];
-  var messages = [];
-  var validationIdx = [];
-  var editedUserCols = isEdit && touchesUserCols_(ctx.c1, ctx.c2);
-  var idTouched = !isEdit || (ctx.c1 <= LC.ID && ctx.c2 >= LC.ID);
-  var substageTouched = isEdit && ctx.c1 <= LC.SUBSTAGE && ctx.c2 >= LC.SUBSTAGE;
-  var statusTouched = isEdit && ctx.c1 <= LC.STATUS && ctx.c2 >= LC.STATUS;
-  var idIndex = null;
-  var getIdIndex = function () { if (!idIndex) idIndex = buildIdIndex_(sheet, startRow, n); return idIndex; };
-  var seen = {};
-  var leadIdx = [];
-  var maxImported = 0;
-  var idRe = new RegExp('^' + escapeRegex_(settings.leadPrefix) + '(\\d+)$', 'i');
+  var out = { messages: [], reverted: 0 };
+  var say = function (m) { if (out.messages.indexOf(m) < 0) out.messages.push(m); };
+  var entries = [], revertEntries = 0;
+  var emptyRows = [], leadIdx = [];
+  var unknown = !actor.email;
+  var blockUnknown = unknown && settings.blockUnknown;
+  var notAllowed = !!actor.email && !actor.admin && !actor.counsellor;
+  var corr = correctionWindow_();
+  var canCorrect = !!corr && actor.admin;
+  var by = actor.email || actor.label;
+
+  var logRevert = function (row, col, kept, attempted, reason) {
+    out.reverted++;
+    if (revertEntries++ >= 50) return;
+    entries.push(buildLogEntry_({
+      row: row, time: now, type: ACT.EDIT_REVERTED, category: CATEGORY.SYSTEM, counsellor: 'System', updatedBy: by,
+      field: leadLabel_(col), oldValue: kept, newValue: attempted, remarks: reason
+    }));
+  };
 
   for (var i = 0; i < n; i++) {
     var row = data[i];
     var r = startRow + i;
+    var snap = parseSnapshot_(row[LC.SNAPSHOT - 1]);
 
-    // A single typed change to an existing Lead ID is reverted.
-    if (isEdit && ctx.single && ctx.c1 === LC.ID && ctx.oldValue !== undefined && str_(ctx.oldValue) !== '' &&
-        str_(row[LC.ID - 1]) !== str_(ctx.oldValue)) {
-      row[LC.ID - 1] = ctx.oldValue;
-      mark(i, LC.ID);
-      messages.push('Lead IDs are generated by the system; ' + ctx.oldValue + ' was restored.');
-    }
-    if (!hasLeadData_(row)) continue;
-    leadIdx.push(i);
-
-    var id = str_(row[LC.ID - 1]);
-    if (id && idTouched) {
-      var key = id.toLowerCase();
-      if (getIdIndex()[key] || seen[key]) {
-        messages.push('Duplicate Lead ID ' + id + ' on row ' + r + ' was replaced with a new ID.');
-        id = '';
-        row[LC.SNAPSHOT - 1] = '';
-        row[LC.CREATED - 1] = '';
-      } else {
-        var m = idRe.exec(id);
-        if (m) maxImported = Math.max(maxImported, parseInt(m[1], 10));
+    // ---- rows that are not leads: nothing may be typed there ----
+    if (!snap) {
+      if (str_(row[LC.ID - 1]) && row[LC.CREATED - 1]) {
+        // A lead from before this version (or whose snapshot was pasted over): accept it as it is now.
+        row[LC.SNAPSHOT - 1] = buildSnapshot_(row);
+        mark(i, LC.SNAPSHOT);
+        leadIdx.push(i);
+        continue;
       }
-    }
-
-    if (isEdit && n <= 50) checkDuplicateContacts_(sheet, r, row, i, ctx, settings, messages, mark);
-
-    // A row with an ID but no snapshot and no created date is an imported lead: initialise it like a new one.
-    var importedNew = !!id && !parseSnapshot_(row[LC.SNAPSHOT - 1]) && !row[LC.CREATED - 1];
-    if (!id || importedNew) {
-      if (!id) {
-        id = generateLeadId_(settings, getIdIndex(), seen);
-        row[LC.ID - 1] = id;
-        mark(i, LC.ID);
-      }
-      seen[id.toLowerCase()] = true;
-      var created = initialiseNewLead_(row, settings, stageInfo, now, actor);
-      created.cols.forEach(function (c) { mark(i, c); });
-      entries = entries.concat(created.entries);
-      messages = messages.concat(created.messages);
-      validationIdx.push(i);
+      var typed = false;
+      cols.forEach(function (col) {
+        if (isSystemCol_(col) && LEAD_FORMULA_COLS.indexOf(col) >= 0) return;
+        if (cellKey_(row[col - 1]) !== '' || (formulas[i][col - c1] || '')) { typed = true; row[col - 1] = ''; mark(i, col); }
+      });
+      if (typed) emptyRows.push(r);
       continue;
     }
-    seen[id.toLowerCase()] = true;
+    leadIdx.push(i);
+    if (!snap.v) snap = upgradeSnapshot_(snap, row);
 
-    // Existing lead: compare against the snapshot taken after the previous tracked change.
-    var snap = parseSnapshot_(row[LC.SNAPSHOT - 1]);
-    if (!snap) {
-      snap = readTracked_(row);
-      var tKey = trackedKeyForCol_(ctx.c1);
-      if (isEdit && ctx.single && tKey) {
-        snap[tKey] = tKey === 'n' ? toDateKey_(ctx.oldValue) : str_(ctx.oldValue);
-      }
-      if (!row[LC.CREATED - 1]) { row[LC.CREATED - 1] = now; mark(i, LC.CREATED); }
-    }
-    var res = trackLeadChanges_(row, snap, {
-      actor: actor, now: now, stageInfo: stageInfo, settings: settings,
-      statusExplicit: statusTouched, logNextFu: true,
-      note: isEdit ? (n > 1 ? 'Bulk edit in sheet' : 'Edited in sheet') : 'Processed by Admin > Process imported / pasted leads'
+    var old = function (col) { return snapValue_(snap, col); };
+    var edited = cols.filter(function (col) {
+      if (LEAD_FORMULA_COLS.indexOf(col) >= 0 || col === LC.DQ_FLAGS || col === LC.SNAPSHOT) return false;
+      return cellKey_(row[col - 1]) !== cellKey_(old(col)) || !!(col <= c2 && col >= c1 && formulas[i][col - c1]);
     });
-    res.cols.forEach(function (c) { mark(i, c); });
-    entries = entries.concat(res.entries);
-    messages = messages.concat(res.messages);
-    if (res.stageChanged || substageTouched) validationIdx.push(i);
+    if (!edited.length) continue;
 
-    if (editedUserCols || res.entries.length) {
-      row[LC.UPDATED_BY - 1] = actor.label;
-      row[LC.LAST_ACTIVITY - 1] = now;
-      mark(i, LC.UPDATED_BY);
-      mark(i, LC.LAST_ACTIVITY);
+    var leadId = str_(old(LC.ID)) || str_(row[LC.ID - 1]);
+    var owner = str_(old(LC.OWNER));
+    var revert = function (col, reason) {
+      var attempted = formulas[i][col - c1] || row[col - 1];
+      row[col - 1] = old(col);
+      mark(i, col);
+      logRevert(row, col, old(col), attempted, reason);
+    };
+
+    // ---- who may change what ----
+    if (blockUnknown || notAllowed) {
+      edited.forEach(function (col) { revert(col, blockUnknown ? 'Editor not identified' : 'Not a counsellor or admin'); });
+      say(blockUnknown
+        ? 'Your change was undone because Lead CRM does not know who you are yet. Click Lead CRM > My overdue follow-ups once, then try again.'
+        : 'Your change was undone: your Google account is not an active counsellor or admin in this CRM.');
+      continue;
     }
+    var accepted = [];
+    edited.forEach(function (col) {
+      var label = leadLabel_(col);
+      if (col <= c2 && col >= c1 && formulas[i][col - c1]) { revert(col, 'Formula typed'); say('Formulas are not allowed in ' + label + '. Your entry was undone.'); return; }
+      if (isSystemCol_(col)) {
+        if (canCorrect && col !== LC.ID) { accepted.push(col); return; }
+        revert(col, 'System column');
+        say('"' + label + '" is filled automatically. Your change was undone.');
+        return;
+      }
+      if (!isEditableCol_(col) && !actor.admin) { revert(col, 'Admin-only column'); say('Only an admin can change ' + label + '. Your change was undone.'); return; }
+      if (!actor.admin && actor.counsellor && !same_(owner, actor.counsellor)) {
+        revert(col, 'Lead assigned to ' + (owner || 'nobody'));
+        say('Lead ' + leadId + ' is assigned to ' + (owner || 'nobody') + '. You can only change your own leads.');
+        return;
+      }
+      accepted.push(col);
+    });
+
+    // ---- values: stage first (other rules depend on it), then status, substage, follow-up date, the rest ----
+    var orderOf = function (col) { var k = [LC.STAGE, LC.STATUS, LC.SUBSTAGE, LC.NEXT_FU].indexOf(col); return k < 0 ? 10 : k; };
+    accepted.sort(function (a, b) { return orderOf(a) - orderOf(b) || a - b; });
+    var kept = [];
+    accepted.forEach(function (col) {
+      if (isSystemCol_(col)) { kept.push(col); return; }   // correction window (admin)
+      var raw = row[col - 1];
+      var res = checkLeadValue_(col, raw, old(col), row, env);
+      if (!res.ok) { revert(col, res.msg); say(res.msg + ' Your entry was undone.'); return; }
+      if (cellKey_(res.value) !== cellKey_(raw)) mark(i, col);   // cleaned value (trimmed, canonical case, date only)
+      row[col - 1] = res.value;
+      if (cellKey_(res.value) !== cellKey_(old(col))) kept.push(col);
+    });
+    if (!kept.length) continue;
+
+    // ---- duplicates (admins changing mobile / email) ----
+    [[LC.MOBILE, settings.dupMobile, 'mobile number'], [LC.EMAIL, settings.dupEmail, 'email ID']].forEach(function (d) {
+      if (kept.indexOf(d[0]) < 0 || same_(d[1], 'Off') || !str_(row[d[0] - 1])) return;
+      var others = findDuplicateLeads_(d[0], row[d[0] - 1], leadId);
+      if (!others.length) return;
+      if (same_(d[1], 'Block')) {
+        kept.splice(kept.indexOf(d[0]), 1);
+        revert(d[0], 'Duplicate ' + d[2]);
+        say('This ' + d[2] + ' already belongs to ' + others.slice(0, 3).join(', ') + '. Your change was undone.');
+      } else {
+        say('Note: this ' + d[2] + ' is also used by ' + others.slice(0, 3).join(', ') + '.');
+      }
+    });
+    if (!kept.length) continue;
+
+    var fin = finishLeadChange_(row, snap, kept, actor, env, now, opts.note || 'Edited in sheet', corr);
+    fin.cols.forEach(function (col) { mark(i, col); });
+    entries = entries.concat(fin.entries);
+    fin.messages.forEach(say);
+    mark(i, LC.SNAPSHOT);
   }
 
-  if (maxImported) bumpLeadSeq_(maxImported);
+  if (emptyRows.length) {
+    say('New leads can only be added by an admin in the Lead Entry sheet. What you typed in row ' +
+      (emptyRows.length > 1 ? emptyRows[0] + '-' + emptyRows[emptyRows.length - 1] : emptyRows[0]) + ' was removed.');
+    var blank = new Array(LEAD_COLS);
+    for (var b = 0; b < LEAD_COLS; b++) blank[b] = '';
+    entries.push(buildLogEntry_({
+      row: blank, time: now, type: ACT.EDIT_REVERTED, category: CATEGORY.SYSTEM, counsellor: 'System', updatedBy: by,
+      field: 'Row(s) without Lead ID: ' + emptyRows.slice(0, 20).join(', ') + (emptyRows.length > 20 ? ' ...' : ''),
+      remarks: 'Typing in empty rows of Lead Management is not allowed'
+    }));
+    out.reverted += emptyRows.length;
+  }
+
+  if (c2 >= LC.SNAPSHOT && leadIdx.length) {
+    // The hidden Audit Snapshot column was pasted over: the reference values of these rows are gone.
+    say('You pasted over the hidden Audit Snapshot column (AI). Press Ctrl+Z (Undo) now, then paste only into the visible columns.');
+    var blankRow = new Array(LEAD_COLS);
+    for (var q = 0; q < LEAD_COLS; q++) blankRow[q] = '';
+    entries.push(buildLogEntry_({
+      row: blankRow, time: now, type: ACT.EDIT_REVERTED, category: CATEGORY.SYSTEM, counsellor: 'System', updatedBy: by,
+      field: 'Audit Snapshot rows ' + startRow + '-' + (startRow + n - 1), remarks: 'Hidden column AI was pasted over; ask the editor to undo'
+    }));
+  }
   writeChangedColumns_(sheet, startRow, data, changed);
-  if (validationIdx.length) applySubstageValidations_(sheet, startRow, data, validationIdx, stageInfo);
+  LEAD_FORMULA_COLS.forEach(function (fc) { if (fc >= c1 && fc <= c2) sheet.getRange(startRow, fc, n, 1).clearContent(); });
+  restoreLeadValidations_(sheet, startRow, n, c1, c2, data);
   if (leadIdx.length) writeDqFlagsForBlock_(sheet, startRow, data, leadIdx);
   if (entries.length) appendLogRows_(entries);
-  return { messages: messages, logged: entries.length };
+  return out;
 }
+
+/**
+ * After accepted changes to a lead row (sheet edit or web app): required-field bookkeeping, counting
+ * outcome changes as follow-ups once the lead is complete, automatic dependent changes, audit entries,
+ * Last Updated By / Last Activity and the new snapshot. Mutates `row`. Returns {entries, messages, cols}.
+ * kept = columns whose new value was accepted; corr = open correction window (or null).
+ */
+function finishLeadChange_(row, snap, kept, actor, env, now, note, corr) {
+  var settings = env.settings;
+  var by = actor.email || actor.label;
+  var out = { entries: [], messages: [], cols: [] };
+  var touch = function (col) { if (out.cols.indexOf(col) < 0) out.cols.push(col); };
+  var old = function (col) { return snapValue_(snap, col); };
+  var owner = str_(old(LC.OWNER));
+
+  // ---- required fields created by this change ----
+  var pending = snap.p.slice(), contacts = snap.pc.slice();
+  var nfKey = toDateKey_(row[LC.NEXT_FU - 1]);
+  var nfChanged = kept.indexOf(LC.NEXT_FU) >= 0 && !!nfKey;
+  if (nfChanged) pending = pending.filter(function (x) { return x !== REQ_NEXT_FU; });
+  if ((kept.indexOf(LC.STAGE) >= 0 || kept.indexOf(LC.OUTCOME) >= 0) && !nfChanged &&
+      (!nfKey || nfKey <= env.today) && pending.indexOf(REQ_NEXT_FU) < 0) pending.push(REQ_NEXT_FU);
+  if (kept.indexOf(LC.OUTCOME) >= 0 && str_(row[LC.OUTCOME - 1])) {
+    contacts.push({ o: str_(row[LC.OUTCOME - 1]), t: now.getTime(), c: actor.counsellor || owner || actor.label, e: by });
+  }
+
+  // ---- audit trail and dependent automatic changes ----
+  var tracked = { o: owner, s: str_(old(LC.STAGE)), ss: str_(old(LC.SUBSTAGE)), st: str_(old(LC.STATUS)), n: toDateKey_(old(LC.NEXT_FU)) };
+  var res = trackLeadChanges_(row, tracked, {
+    actor: actor, now: now, stageInfo: env.stageInfo, settings: settings,
+    statusExplicit: kept.indexOf(LC.STATUS) >= 0, logNextFu: true, note: note
+  });
+  res.cols.forEach(touch);
+  out.entries = out.entries.concat(res.entries);
+  out.messages = out.messages.concat(res.messages);
+  kept.forEach(function (col) {
+    if (trackedKeyForCol_(col)) return;
+    out.entries.push(buildLogEntry_({
+      row: row, time: now, type: isSystemCol_(col) ? ACT.SYS_CORRECTED : ACT.FIELD_UPDATED, category: CATEGORY.RECORD,
+      counsellor: actor.label, updatedBy: by, field: leadLabel_(col), oldValue: old(col), newValue: row[col - 1],
+      remarks: isSystemCol_(col) ? 'Admin correction (window opened by ' + (corr ? corr.by : '?') + ')' : note
+    }));
+  });
+  if (isClosedStatus_(row[LC.STATUS - 1])) pending = pending.filter(function (x) { return x !== REQ_NEXT_FU; });
+  if (pending.length) out.messages.push('Lead ' + str_(row[LC.ID - 1]) + ' is incomplete: choose a new ' + pending.join(', ') + '.');
+
+  // ---- outcome changes count as follow-ups once the lead is complete ----
+  if (contacts.length && !incompleteFields_(row, pending, env).length) {
+    contacts.forEach(function (pc) {
+      var t = new Date(pc.t);
+      out.entries.push(buildLogEntry_({
+        row: row, time: t, type: ACT.SHEET_UPDATE, category: CATEGORY.CONTACT, counsellor: pc.c, updatedBy: pc.e,
+        outcome: pc.o, nextFu: row[LC.NEXT_FU - 1], remarks: 'Outcome changed in the sheet'
+      }));
+      var tk = toDateKey_(t);
+      [LC.LAST_CONTACT, LC.LAST_FU_DATE].forEach(function (col) {
+        if (!isDate_(row[col - 1]) || toDateKey_(row[col - 1]) < tk) { row[col - 1] = dateFromKey_(tk); touch(col); }
+      });
+    });
+    contacts = [];
+  }
+
+  if (kept.some(function (col) { return !isSystemCol_(col); })) {
+    row[LC.UPDATED_BY - 1] = actor.label;
+    row[LC.LAST_ACTIVITY - 1] = now;
+    touch(LC.UPDATED_BY);
+    touch(LC.LAST_ACTIVITY);
+  }
+  row[LC.SNAPSHOT - 1] = buildSnapshot_(row, { p: pending, pc: contacts });
+  touch(LC.SNAPSHOT);
+  return out;
+}
+
+/** v1 snapshot (tracked fields only): use today's row as the reference, with the tracked fields from the snapshot. */
+function upgradeSnapshot_(snap, row) {
+  var base = row.slice();
+  base[LC.OWNER - 1] = snap.o; base[LC.STAGE - 1] = snap.s; base[LC.SUBSTAGE - 1] = snap.ss; base[LC.STATUS - 1] = snap.st;
+  base[LC.NEXT_FU - 1] = snap.n ? dateFromKey_(snap.n) : '';
+  var full = parseSnapshot_(buildSnapshot_(base, { p: snap.p, pc: snap.pc }));
+  return full;
+}
+
+/** Lead IDs (other than exceptId) whose mobile (last 10 digits) or email equals the value. */
+function findDuplicateLeads_(col, value, exceptId) {
+  var sheet = getSheet_(SHEET.LEADS);
+  var last = lastLeadRow_(sheet);
+  if (last < 2) return [];
+  var key = col === LC.MOBILE ? mobileKey_(value) : str_(value).toLowerCase();
+  var vals = sheet.getRange(2, 1, last - 1, Math.max(col, LC.ID)).getValues();
+  var out = [];
+  vals.forEach(function (r) {
+    var id = str_(r[LC.ID - 1]);
+    if (!id || same_(id, exceptId)) return;
+    var v = col === LC.MOBILE ? mobileKey_(r[col - 1]) : str_(r[col - 1]).toLowerCase();
+    if (v && v === key) out.push(id);
+  });
+  return out;
+}
+
+/** Re-applies the column rules on an edited block (a normal paste replaces the target's dropdowns). */
+function restoreLeadValidations_(sheet, startRow, n, c1, c2, data) {
+  for (var c = c1; c <= c2; c++) {
+    if (c === LC.SUBSTAGE) continue;
+    var rule = leadColumnRule_(c);
+    sheet.getRange(startRow, c, n, 1).setDataValidation(rule);
+  }
+  if (c1 <= LC.SUBSTAGE && c2 >= LC.STAGE || (c1 <= LC.SUBSTAGE && c2 >= LC.SUBSTAGE)) {
+    var stageInfo = getStageInfo_();
+    var cache = {};
+    var rules = data.map(function (row) {
+      return [str_(row[LC.ID - 1]) ? substageRuleFor_(row[LC.STAGE - 1], stageInfo, cache) : null];
+    });
+    sheet.getRange(startRow, LC.SUBSTAGE, n, 1).setDataValidations(rules);
+  }
+}
+
+/* ================================================================== */
+/* Column layout check (inserted / deleted / moved columns)            */
+/* ================================================================== */
+
+/** Header text expected in each Lead Management column. */
+function expectedLeadHeaders_() {
+  var h = LEAD_HEADERS.slice();
+  try { readCustomFields_().forEach(function (f) { h[customCol_(f.slot) - 1] = f.name || defaultCustomName_(f.slot); }); } catch (e) { /* ignore */ }
+  return h;
+}
+
+/**
+ * Compares row 1 with the expected layout. With repair=true, empty columns that were inserted (and empty
+ * extra columns at the right) are deleted. Returns {ok}. A layout that cannot be repaired is reported once.
+ */
+function checkLeadColumns_(repair) {
+  var sh = ss_().getSheetByName(SHEET.LEADS);
+  if (!sh) return { ok: true };
+  var maxC = sh.getMaxColumns();
+  var head = sh.getRange(1, 1, 1, maxC).getValues()[0];
+  var exp = expectedLeadHeaders_();
+  var match = function (i, j) { return same_(head[i - 1], exp[j - 1]); };
+  var perfect = maxC === LEAD_COLS;
+  for (var k = 1; perfect && k <= LEAD_COLS; k++) if (!match(k, k)) perfect = false;
+  if (perfect) { PropertiesService.getDocumentProperties().deleteProperty('LAYOUT_BROKEN'); return { ok: true }; }
+  if (!repair) {
+    // Cheap check during edits: only the first LEAD_COLS columns must match.
+    for (var q = 1; q <= LEAD_COLS; q++) if (!match(q, q)) return { ok: false };
+    return { ok: true };
+  }
+  var del = [], i = 1, j = 1;
+  var lastRow = Math.max(sh.getLastRow(), 1);
+  var emptyCol = function (c) {
+    if (str_(head[c - 1])) return false;
+    return !sh.getRange(1, c, lastRow, 1).getValues().some(function (x) { return str_(x[0]) !== ''; });
+  };
+  while (i <= maxC) {
+    if (j <= LEAD_COLS && match(i, j)) { i++; j++; continue; }
+    if (emptyCol(i)) { del.push(i); i++; continue; }
+    break;
+  }
+  var props = PropertiesService.getDocumentProperties();
+  if (j > LEAD_COLS && i > maxC) {
+    del.sort(function (a, b) { return b - a; }).forEach(function (c) { sh.deleteColumn(c); });
+    props.deleteProperty('LAYOUT_BROKEN');
+    if (del.length) toast_('Lead Management: ' + del.length + ' empty column(s) that were added were removed. Columns cannot be added here.', 10);
+    return { ok: true };
+  }
+  if (!props.getProperty('LAYOUT_BROKEN')) {
+    props.setProperty('LAYOUT_BROKEN', '1');
+    var blank = new Array(LEAD_COLS);
+    for (var b = 0; b < LEAD_COLS; b++) blank[b] = '';
+    appendLogRows_([buildLogEntry_({
+      row: blank, time: new Date(), type: ACT.EDIT_REVERTED, category: CATEGORY.SYSTEM, counsellor: 'System',
+      updatedBy: 'System', field: 'Lead Management columns', newValue: 'Column ' + colLetter_(i) + ' is "' + str_(head[i - 1]) + '", expected "' + (exp[j - 1] || '') + '"',
+      remarks: 'Columns were moved or deleted. The CRM is paused until an admin undoes it.'
+    })]);
+  }
+  toast_('Columns of Lead Management were moved or deleted. Admin: press Ctrl+Z (Undo) now. Lead CRM is paused until the columns are back.', 20);
+  return { ok: false };
+}
+
+/** Rows deleted directly in Lead Management (not with Admin > Delete lead(s)) are recorded. */
+function checkDeletedRows_() {
+  var props = PropertiesService.getDocumentProperties();
+  var before = parseInt(props.getProperty('LEAD_COUNT'), 10);
+  var now = countLeads_();
+  props.setProperty('LEAD_COUNT', String(now));
+  if (isNaN(before) || now >= before) return;
+  var blank = new Array(LEAD_COLS);
+  for (var b = 0; b < LEAD_COLS; b++) blank[b] = '';
+  appendLogRows_([buildLogEntry_({
+    row: blank, time: new Date(), type: ACT.EDIT_REVERTED, category: CATEGORY.SYSTEM, counsellor: 'System', updatedBy: 'System',
+    field: 'Lead Management rows', oldValue: before + ' leads', newValue: now + ' leads',
+    remarks: 'Rows were deleted directly instead of with Admin > Delete lead(s). Use Undo (Ctrl+Z) to bring them back.'
+  })]);
+  toast_((before - now) + ' lead row(s) were deleted directly. Use Undo (Ctrl+Z), then Lead CRM > Admin > Delete lead(s) instead.', 15);
+}
+
+function countLeads_() {
+  var sh = getSheet_(SHEET.LEADS);
+  var last = lastLeadRow_(sh);
+  if (last < 2) return 0;
+  return sh.getRange(2, LC.ID, last - 1, 1).getValues().filter(function (r) { return str_(r[0]) !== ''; }).length;
+}
+
+function rememberLeadCount_() {
+  try { PropertiesService.getDocumentProperties().setProperty('LEAD_COUNT', String(countLeads_())); } catch (e) { /* ignore */ }
+}
+
+/* ================================================================== */
+/* IDs, new leads, change tracking                                     */
+/* ================================================================== */
 
 function generateLeadId_(settings, idIndex, seen) {
   var id;
@@ -395,7 +656,7 @@ function initialiseNewLead_(row, settings, stageInfo, now, actor) {
   row[LC.UPDATED_BY - 1] = actor.label;
   row[LC.LAST_ACTIVITY - 1] = now;
   var t = readTracked_(row);
-  row[LC.SNAPSHOT - 1] = JSON.stringify(t);
+  row[LC.SNAPSHOT - 1] = buildSnapshot_(row);
 
   var summary = 'Owner: ' + (t.o || '-') + '; Stage: ' + (t.s || '-') + (t.ss ? ' / ' + t.ss : '') +
     '; Status: ' + (t.st || '-') + (t.n ? '; Next follow-up: ' + t.n : '');
@@ -406,19 +667,24 @@ function initialiseNewLead_(row, settings, stageInfo, now, actor) {
   return { cols: cols, entries: [entry], messages: messages };
 }
 
-/** Status implied by moving to the configured Converted / Lost stage ('' = no change). */
+/**
+ * Status implied by the stage ('' = no change): moving to the Converted / Lost stage sets Converted / Lost;
+ * moving a Converted / Lost lead to any other stage sets the default status (Status must match the stage).
+ */
 function statusForStage_(stage, currentStatus, settings) {
   if (!settings.autoSync || !str_(stage)) return '';
   var target = '';
   if (settings.convertedStage && same_(stage, settings.convertedStage)) target = STATUS.CONVERTED;
   else if (settings.lostStage && same_(stage, settings.lostStage)) target = STATUS.LOST;
+  else if ((settings.convertedStage && same_(currentStatus, STATUS.CONVERTED)) ||
+           (settings.lostStage && same_(currentStatus, STATUS.LOST))) target = settings.defaultStatus || STATUS.OPEN;
   if (!target || same_(currentStatus, target) || same_(currentStatus, STATUS.DUPLICATE)) return '';
   return target;
 }
 
 /**
  * Compares a lead row with its previous snapshot, applies the dependent rules and builds audit
- * entries. Mutates `row`. Shared by onEdit and the follow-up sidebar.
+ * entries. Mutates `row`. Shared by the edit guard, the follow-up form and the web app.
  * ctx: {actor, now, stageInfo, settings, statusExplicit, logNextFu, note}
  * Returns {entries, messages, cols, stageChanged}.
  */
@@ -492,14 +758,8 @@ function trackLeadChanges_(row, snap, ctx) {
   }
 
   // 5. Next follow-up date
-  if (cur.n !== snap.n) {
-    if (ctx.logNextFu) audit(ACT.FU_SCHEDULED, CATEGORY.RECORD, 'Next Follow-Up Date', snap.n, cur.n);
-    if (cur.n && cur.n < todayKey_() && !isClosedStatus_(cur.st)) {
-      out.messages.push('Next follow-up date ' + cur.n + ' is in the past (the lead now shows as overdue).');
-    }
-  }
-
-  setCol(LC.SNAPSHOT, JSON.stringify(readTracked_(row)));
+  if (cur.n !== snap.n && ctx.logNextFu) audit(ACT.FU_SCHEDULED, CATEGORY.RECORD, 'Next Follow-Up Date', snap.n, cur.n);
+  // The caller writes the snapshot (buildSnapshot_) after all changes to the row are known.
   return out;
 }
 
@@ -568,42 +828,16 @@ function writeChangedColumns_(sheet, startRow, data, changed) {
   });
 }
 
-/** Contact duplicate checks for single / small edits (bulk pastes rely on Data Quality Flags). */
-function checkDuplicateContacts_(sheet, r, row, i, ctx, settings, messages, mark) {
-  var checks = [
-    { col: LC.MOBILE, mode: settings.dupMobile, label: 'mobile number' },
-    { col: LC.EMAIL, mode: settings.dupEmail, label: 'email ID' }
-  ];
-  checks.forEach(function (chk) {
-    if (same_(chk.mode, 'Off') || chk.col < ctx.c1 || chk.col > ctx.c2) return;
-    var v = str_(row[chk.col - 1]);
-    if (!v) return;
-    var last = lastLeadRow_(sheet);
-    if (last < 2) return;
-    var hits = sheet.getRange(2, chk.col, last - 1, 1).createTextFinder(v).matchEntireCell(true).findAll()
-      .filter(function (h) { return h.getRow() !== r; });
-    if (!hits.length) return;
-    var ids = hits.slice(0, 3).map(function (h) { return str_(sheet.getRange(h.getRow(), LC.ID).getValue()) || ('row ' + h.getRow()); });
-    if (same_(chk.mode, 'Block')) {
-      row[chk.col - 1] = ctx.single && ctx.oldValue !== undefined ? ctx.oldValue : '';
-      mark(i, chk.col);
-      messages.push('Blocked: ' + chk.label + ' ' + v + ' already belongs to ' + ids.join(', ') + '.');
-    } else {
-      messages.push('Warning: ' + chk.label + ' ' + v + ' is also used by ' + ids.join(', ') + (hits.length > 3 ? ' and others' : '') + '.');
-    }
-  });
-}
-
 /* ================================================================== */
 /* Dependent substage dropdowns                                        */
 /* ================================================================== */
 
-/** Rule used where no stage is selected (or a stage has no active substages). Warning-only so pastes still work. */
+/** Rule used where no stage is selected (or a stage has no active substages): nothing may be entered. */
 function noSubstageRule_(stage) {
   return SpreadsheetApp.newDataValidation()
     .requireFormulaSatisfied('=FALSE')
-    .setAllowInvalid(true)
-    .setHelpText(stage ? 'Stage "' + stage + '" has no active substages - leave blank.' : 'Select a Lead Stage first; the substage list depends on it.')
+    .setAllowInvalid(false)
+    .setHelpText(stage ? 'Stage "' + stage + '" has no substages. Leave this empty.' : 'Choose a Lead Stage first.')
     .build();
 }
 
@@ -755,16 +989,21 @@ function onDashboardEdit_(e, sheet, range) {
   refreshDashboardData_();
 }
 
-/** Lists & Settings edits: custom-field table or the Counsellor-Locked Fields list. */
+/** Lists & Settings edits: custom-field table, Counsellor-Editable Fields, setting values. */
 function onSettingsEdit_(range) {
+  clearMemo_();
   if (onCustomFieldTableEdit_(range)) return;
   var c1 = range.getColumn(), c2 = range.getLastColumn();
-  if (c1 <= LS.LOCKED && c2 >= LS.LOCKED && range.getLastRow() >= 2) {
-    clearMemo_();
+  if (range.getLastRow() < 2) return;
+  if (c1 <= LS.EDITABLE && c2 >= LS.EDITABLE) {
     applyLockedColumns_();
-    toast_('Locked columns updated: ' + lockedCols_().filter(function (c) {
-      return LEAD_SYSTEM_COLS.indexOf(c) < 0 && LEAD_FORMULA_COLS.indexOf(c) < 0;
-    }).map(function (c) { return colLetter_(c); }).join(', ') + ' (plus all system / formula columns).');
+    toast_('Counsellors can now edit: ' + editableCols_().map(function (c) { return leadLabel_(c); }).join(', ') + '. Everything else is grey and locked.', 12);
+    return;
+  }
+  if (c1 <= LS.SET_VALUE && c2 >= LS.SET_VALUE) {
+    applyLeadSheetRules_(getSheet_(SHEET.LEADS));
+    refreshDateValidations_(true);
+    setupLeadEntryRules_();
   }
 }
 
@@ -772,48 +1011,32 @@ function onSettingsEdit_(range) {
 /* Admin actions related to triggers                                   */
 /* ================================================================== */
 
-/** Admin > Process imported / pasted leads: assigns missing IDs/dates and rebuilds tracking for every row. */
-function processAllLeads() {
-  requireAdmin_();
+/**
+ * Admin > Re-check all lead rows: runs the edit guard over every row (as the admin running it). Use after
+ * the CRM was busy, after an Undo of a column change, or after an import made by another tool.
+ */
+function recheckAllLeads() {
+  var email = requireAdmin_();
   var sheet = getSheet_(SHEET.LEADS);
-  var last = lastLeadRow_(sheet);
-  if (last < 2) { toast_('No leads found.'); return; }
+  var last = Math.max(lastLeadRow_(sheet), 2);
   var lock = LockService.getDocumentLock();
   lock.waitLock(30000);
-  var total = { messages: [], logged: 0 };
+  var total = { messages: [], reverted: 0 };
   try {
     var actor = getActor_();
+    if (!actor.email) actor = { email: email, name: '', label: email, admin: true, counsellor: '' };
     for (var start = 2; start <= last; start += 2000) {
       var n = Math.min(2000, last - start + 1);
-      var res = processLeadRows_(sheet, start, n, { c1: 1, c2: LEAD_COLS, single: false, actor: actor, source: 'bulk' });
+      var res = guardLeadRows_(sheet, start, n, 1, LEAD_COLS, actor, { note: 'Admin > Re-check all lead rows' });
       total.messages = total.messages.concat(res.messages);
-      total.logged += res.logged;
+      total.reverted += res.reverted;
     }
     refreshAllSubstageValidations_();
+    updateLeadProtection_();
+    rememberLeadCount_();
   } finally {
     lock.releaseLock();
   }
-  var msg = 'Processed rows 2-' + last + '. Audit entries written: ' + total.logged + '.' +
-    (total.messages.length ? '\n\nNotes:\n- ' + total.messages.slice(0, 15).join('\n- ') : '');
-  alert_(msg);
-}
-
-function useInstallableEditTrigger() {
-  requireAdmin_();
-  var ss = ss_();
-  var exists = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'onEditInstallable'; });
-  if (!exists) ScriptApp.newTrigger('onEditInstallable').forSpreadsheet(ss).onEdit().create();
-  PropertiesService.getDocumentProperties().setProperty(PROP.EDIT_MODE, 'installable');
-  applyProtections_(ss);
-  toast_('Installable edit trigger active (runs as you). Locked columns now use STRICT protection.');
-}
-
-function useSimpleEditTrigger() {
-  requireAdmin_();
-  ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'onEditInstallable') ScriptApp.deleteTrigger(t);
-  });
-  PropertiesService.getDocumentProperties().setProperty(PROP.EDIT_MODE, 'simple');
-  applyProtections_(ss_());
-  toast_('Legacy simple mode: onEdit runs as each editor and locked columns fall back to WARNING-only protection.');
+  notify_('Checked rows 2-' + last + '. Values put back: ' + total.reverted + '.' +
+    (total.messages.length ? '\n\n- ' + total.messages.slice(0, 12).join('\n- ') : ''));
 }
