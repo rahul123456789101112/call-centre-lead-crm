@@ -19,6 +19,7 @@ function onOpen(e) {
       .addSeparator()
       .addItem('Clear view filters', 'viewClear'))
     .addItem('Refresh Dashboard', 'refreshDashboard')
+    .addItem('Open counsellor web app', 'showWebAppLink')
     .addItem('Add custom field...', 'addCustomField')
     .addItem('Remove custom field...', 'removeCustomField')
     .addItem('Refresh substage dropdowns', 'refreshAllSubstageValidations')
@@ -33,8 +34,10 @@ function onOpen(e) {
       .addItem('Reapply protections', 'reapplyProtections')
       .addItem('Recalculate ID counters', 'recalculateIdCounters')
       .addSeparator()
-      .addItem('Use installable edit trigger (Workspace domains)', 'useInstallableEditTrigger')
-      .addItem('Use simple edit trigger (default)', 'useSimpleEditTrigger')
+      .addItem('Use installable edit trigger + strict locking (default)', 'useInstallableEditTrigger')
+      .addItem('Use legacy simple edit trigger (warning-only locking)', 'useSimpleEditTrigger')
+      .addItem('Recalculate data-quality flags', 'recalculateDataQuality')
+      .addItem('Set counsellor web app URL', 'setWebAppUrl')
       .addSeparator()
       .addItem('Enable daily email reminders', 'enableEmailReminders')
       .addItem('Disable daily email reminders', 'disableEmailReminders')
@@ -135,6 +138,17 @@ function viewClear() {
   toast_('Filters cleared.');
 }
 
+/* ---------- Counsellor web app ---------- */
+
+function showWebAppLink() {
+  var url = getWebAppUrl_();
+  if (!url) { alert_('The counsellor web app is not deployed yet. See docs/SETUP.md, "Counsellor web app".'); return; }
+  var html = HtmlService.createHtmlOutput('<div style="font-family:Roboto,Arial;font-size:13px;line-height:1.6">' +
+    'Counsellor web app (share this link with counsellors):<br><a href="' + url + '" target="_blank" rel="noopener">' + url + '</a></div>')
+    .setWidth(520).setHeight(120);
+  SpreadsheetApp.getUi().showModalDialog(html, CRM_TITLE);
+}
+
 /* ---------- Identity ---------- */
 
 function identifyMe() {
@@ -186,7 +200,10 @@ function runHealthCheck() {
   var triggers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
   ok(triggers.indexOf('onChangeInstallable') >= 0, 'onChange trigger installed (refreshes dropdowns after sort/insert)');
   var mode = getEditMode_();
-  ok(mode === 'simple' || triggers.indexOf('onEditInstallable') >= 0, 'Edit tracking mode: ' + mode);
+  ok(mode === 'simple' || triggers.indexOf('onEditInstallable') >= 0, 'Edit tracking mode: ' + mode + (mode === 'installable' ? ' (strict locking)' : ' (warning-only locking)'));
+  ok(triggers.indexOf('scheduledMaintenance') >= 0, 'Hourly maintenance trigger (data quality + dashboard)');
+  ok(!!getWebAppUrl_(), 'Counsellor web app URL: ' + (getWebAppUrl_() || 'not deployed'));
+  ok(true, 'Counsellor-locked columns: ' + lockedCols_().map(function (c) { return colLetter_(c); }).join(', '));
   var props = PropertiesService.getDocumentProperties();
   var pending = props.getProperty(SETUP_STATE_KEY);
   ok(!pending, pending ? 'Setup unfinished - run Set up / repair workbook again (' + pending + ')' : 'Setup completed');

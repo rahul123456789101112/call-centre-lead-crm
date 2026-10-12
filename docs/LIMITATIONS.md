@@ -1,73 +1,100 @@
 # Known Limitations
 
-This CRM is built only on Google Sheets and Apps Script. These are the trade-offs and platform limits that remain.
+This CRM is built only on Google Sheets and Apps Script, for one Google Workspace organisation (@companyname.com). These are the trade-offs and platform limits that remain.
 
-## Identity and security
-1. **Editor identity is not always available.**
-   - Google gives a simple `onEdit` trigger the editor's email only in some cases: the same Workspace domain, or the script owner.
-   - For consumer (gmail.com) or cross-domain users, the CRM relies on a temporary-key mapping. That mapping exists only after the user has opened the follow-up form or *Identify me*, and Google rotates the key every 30 days (re-registered on next use).
-   - Until then, sheet edits show *Unidentified user*. Follow-ups logged through the form always record a counsellor, because the caller selects one.
-2. **Installable edit-trigger mode** runs as the admin. It attributes edits correctly only where Google populates `e.user`, which in practice means a single Workspace domain.
-3. **Protections are safeguards, not a security boundary.**
-   - System/formula columns and the Follow-Up Log use *warning* protection, because the edit trigger and the follow-up form run as the caller and callers must be able to sort.
-   - A determined editor can bypass the warnings, edit or delete log rows, or restore old versions. Manual log edits are themselves logged, but deleting whole log rows does not fire `onEdit` and is not detected.
-   - Use version history and periodic copies for assurance.
-4. Dashboard filter cells are **shared**: one user changing the period changes it for everyone viewing.
-5. *Views* in the menu use the sheet's shared basic filter. Personal views need *Data → Filter views*, which Apps Script cannot create without the Advanced Sheets API.
+## Identity, access and confidentiality
+1. **Identity depends on the Workspace domain.**
+   - The installable edit trigger (`e.user`) and the web app (`Session.getActiveUser()`) only receive the user's email when that user is in the same Workspace domain as the owner.
+   - Guests from other domains appear as *Unidentified user* in the sheet and are always denied by the web app.
+   - The legacy temporary-key mapping is used only in legacy simple mode.
+2. **The owner account matters.**
+   - The installable triggers and the web app run as the account that created them, so that account must stay active and keep edit rights on everything.
+   - If ownership changes, the new owner must run *Set up / repair workbook* and redeploy the web app.
+3. **Protections are not a confidentiality boundary.**
+   - Anyone with any access to the spreadsheet (editor, commenter or viewer) can copy, download or print all of it.
+   - Confidentiality therefore relies on **not sharing the spreadsheet with counsellors** and using the web app (CONFIDENTIALITY.md).
+   - Admins and the owner always have full access.
+4. **Copy/download/screenshot detection is limited.**
+   - Apps Script receives no event for downloads, copies or prints of the spreadsheet. These appear only in the Workspace **Drive audit log**, which depends on your edition.
+   - The web app reports Ctrl+C copies on a best-effort basis; screenshots, photos and printing the page cannot be detected.
+5. **Strict locking side effects (counsellors still in the spreadsheet):**
+   - they cannot sort Lead Management (sorting would move locked cells) and may not be able to change the shared filter; they should use personal *filter views*;
+   - deleting whole rows is also blocked for them, which is intended.
+6. The web app shows at most **300 leads per list** (search narrows it). Admins see all leads.
+7. **Web app code changes need a new deployment version.** Until it is redeployed the web app keeps running the old code (SETUP.md §11).
+8. Dashboard filter cells are **shared**: one admin changing the period changes it for everyone viewing.
+9. *Views* in the menu use the sheet's shared basic filter. Personal views need *Data → Filter views*, which Apps Script cannot create without the Advanced Sheets API.
 
 ## Triggers and timing
-6. **Simple triggers have a 30-second limit and do not fire for edits made by scripts, the Sheets API, imports or form submissions.**
-   - Pastes of more than ~2,000 rows, or edits made while another save holds the lock for more than 15 s, may be left unprocessed until the next edit of that row, or until *Admin → Process imported / pasted leads* runs.
-7. Row deletions do not fire `onEdit`. Deleting a lead row leaves its history in the log, which is intended, and nothing records the deletion.
-8. **Audit "old values" come from the hidden snapshot column (AI).**
-   - A lead that existed before the script, or whose snapshot was overwritten by a paste, has no reliable old value for its first change.
-   - After that the trail is exact.
-   - If a whole lead row is copy-pasted, the duplicate-ID check treats the pasted row as a new lead and rebuilds its snapshot. Pasting *only* the hidden column AI over another lead would corrupt that lead's baseline, so do not edit or paste into AI.
-9. **Substage dropdowns are per-row rules written by the script.**
-   - After sorting, inserting or deleting rows they are refreshed by the onChange trigger (throttled to every 30 s). Whether Google fires onChange for a sort has not been confirmed (see "What was verified" below).
-   - *Refresh substage dropdowns* is the fallback, and the script re-validates every substage change regardless.
-10. After choosing a stage, there is a short delay (usually under 2 seconds) before the matching substage list appears in the Lead Substage column (Q).
+10. **The stage→substage fast path runs in the simple `onEdit` trigger.**
+    - It uses a cached copy of Stage Master (refreshed when Stage Master is edited, and at least every 6 hours). A stage list changed by an import or another script is picked up by *Refresh substage dropdowns* or after the cache expires.
+    - Google still needs a moment (normally well under a second) to run it after the edit is saved.
+    - If the same substage name exists under two stages, the fast path still clears it on a stage change (by design: always re-pick the substage).
+11. **Installable triggers do not fire for edits made by scripts, the Sheets API or imports, and have a 30-second limit per simple trigger / 6 minutes per installable trigger.**
+    - Very large pastes, or edits made while another save holds the lock for more than 15 s, may be left unprocessed until the next edit of that row, or until *Admin → Process imported / pasted leads* runs.
+12. Row deletions do not fire `onEdit`. Deleting a lead row leaves its history in the log, which is intended, and nothing records the deletion.
+13. **Audit "old values" come from the hidden snapshot column (AI).**
+    - A lead that existed before the script, or whose snapshot was overwritten by a paste, has no reliable old value for its first change. After that the trail is exact.
+    - Do not edit or paste into AI.
+14. **Substage dropdowns are per-row rules written by the script.**
+    - After sorting, inserting or deleting rows they are refreshed by the onChange trigger (throttled to every 30 s). Whether Google fires onChange for a sort has not been confirmed.
+    - *Refresh substage dropdowns* is the fallback, and the script re-validates every substage change regardless.
 
-## Reporting
-11. **The dashboard reserves fixed space:**
+## Reporting and data quality (performance trade-offs)
+15. **The dashboard is not live.** It is computed by the script and refreshed:
+    - when a filter changes;
+    - hourly;
+    - on *Refresh Dashboard*.
+    It can therefore be up to an hour old. *Last Refreshed* shows its age.
+    This replaced ~1,000 formulas that recalculated on every edit and made the sheet slow for everyone.
+16. **Data Quality Flags (AH) are script values.**
+    - Edited rows update immediately; all rows hourly.
+    - Date-dependent flags ("Overdue follow-up") can lag by up to an hour after midnight.
+    - Changes made outside the triggers show after the next hourly run.
+17. **Duplicate detection** compares the last 10 digits of mobile numbers and full email addresses. It flags duplicates in AH and colours C/D, and does not block them (unless *Block* is set, for single entries).
+18. **The dashboard reserves fixed space:**
     - 25 stages, 80 stage/substage pairs, 40 counsellors, 10 ageing buckets, 10 statuses/sources;
     - 62 days in the daily trend;
     - 500 rows in the due/overdue list;
     - the first 25 unassigned/unworked leads.
-    Beyond these limits lists are truncated, not broken. Admins can enlarge them by editing `setupDashboard_` (the section sizes) and re-running setup.
-12. Chart ranges are resized only when an admin edits master data or runs *Refresh Dashboard*. Between refreshes a chart may show an empty category or omit a new one.
-13. **Snapshot vs period metrics.**
-    - Total, Pending, Overdue, Converted, Lost, Not Contacted, No Activity and ageing are current or as-of-today, not historical. Converted and Lost also include leads converted outside the period.
-    - Conversions *by day* come from `Lead Status → Converted` audit entries, so conversions made before the script existed, or edits that bypassed the trigger, are not in the daily trend.
-14. **Counsellor attribution.**
-    - Activity metrics use the counsellor recorded on the activity, which is chosen in the form.
+    Beyond these limits lists are truncated, not broken. Admins can enlarge them in `DASH_SIZES` (Dashboard.gs) and re-run setup.
+19. **Snapshot vs period metrics.**
+    - Total, Pending, Overdue, Converted, Lost, Not Contacted, No Activity and ageing are current or as-of-today, not historical.
+    - Conversions *by day* come from `Lead Status → Converted` audit entries.
+20. **Counsellor attribution.**
+    - Activity metrics use the counsellor recorded on the activity (the signed-in counsellor in the web app).
     - Lead metrics use the *current* Assigned Counsellor.
-    - Historical names are kept as text, so renaming a counsellor splits their history; add a new counsellor row instead.
-15. **Duplicate mobile/email highlighting** is conditional formatting (`COUNTIF` per visible cell), not a column formula, so it adds no whole-sheet recalculation. As a result:
-    - duplicates are not listed in Data Quality Flags and cannot be filtered by text;
-    - numbers stored with a leading `+` may not be matched by `COUNTIF`.
-    The script's entry-time check (exact text match, with toast) still works.
-16. **Setup must be run with *Run*, not *Debug*, and may need more than one run** on slow sheets. Progress is kept per stage (see SETUP.md). A single stage that alone takes more than 6 minutes cannot be resumed part-way; that has not been observed but cannot be ruled out without a real test.
-17. Reports are formula-based (FILTER/COUNTIFS/QUERY) and not pivot tables. Admins can add pivot tables on extra sheets. Google Sheets' practical limit (10 million cells, recalculation speed) means very large logs (over ~200k activities) will slow the dashboard. Archive old log rows to another file yearly if needed.
+    - Renaming a counsellor splits their history; add a new counsellor row instead.
+21. **Follow-Up Count (V) and Total Activities (AG) remain `ARRAYFORMULA`s over the log.** On very large logs (over ~100k rows) they add about a second of background recalculation after each save. Archive old log rows yearly.
+22. **Access Log and Follow-Up Log grow without limit.** Archive them yearly (a spreadsheet allows 10 million cells).
+23. **Setup must be run with *Run*, not *Debug*, by the owner, and may need more than one run** on slow sheets. Progress is kept per stage.
 
 ## Data entry
-18. **Lead Status values** `Converted`, `Lost`, `Duplicate` are fixed words used by reports and colours. Other lists are fully configurable.
-19. **Columns must not be inserted, deleted or reordered** in Lead Management (A–AI) or Follow-Up Log (A–R). Custom fields use 10 fixed, hideable slots (E–N); more than 10 custom fields are not supported. A hidden custom column is not private: any editor can unhide it.
-20. **Lead IDs are unique and stable but not gap-free:** rejected or concurrent attempts can skip numbers.
-21. **Activity backdating** in the form is limited by *Max Backdate Days*. Activities typed directly into the log are not supported (they are recorded as tampering).
-22. **Email reminders** depend on Google's daily MailApp quota (about 100 recipients/day for consumer accounts, about 1,500 for Workspace).
+24. **Lead Status values** `Converted`, `Lost`, `Duplicate` are fixed words used by reports and colours. Other lists are fully configurable.
+25. **Columns must not be inserted, deleted or reordered** in Lead Management (A–AI) or Follow-Up Log (A–R).
+    - Custom fields use 10 fixed, hideable slots (E–N); more than 10 are not supported.
+    - A hidden column is not private for spreadsheet users.
+26. **Lead IDs are unique and stable but not gap-free:** rejected or concurrent attempts can skip numbers.
+27. **Activity backdating** is limited by *Max Backdate Days*. Activities typed directly into the log are not supported (they are recorded as tampering).
+28. **Email reminders** depend on Google's daily MailApp quota (about 1,500 recipients/day for Workspace).
 
 ## What was verified, and how
 The code was written without access to a live Google Sheets environment.
-- Each `.gs` file and the sidebar script were syntax-checked with Node.js.
-- A mock run executed setup, edits, pastes, sorting, sidebar submissions, master-data changes and log tampering against an in-memory imitation of the Sheets services (see TESTING.md).
-- **Not verified in a real spreadsheet:**
-  - the behaviour of the written Sheets formulas (QUERY/FILTER/ARRAYFORMULA results and performance at 10,000 rows);
-  - conditional-format and data-validation rendering;
+- Every `.gs` file and the scripts in both HTML files were syntax-checked with Node.js.
+- An in-memory imitation of the Sheets/Apps Script services ran 113 scenario checks (TESTING.md → *Automated pre-release check*). They cover:
+  - setup, edits and the stage fast path;
+  - strict-locking configuration;
+  - dashboard numbers and data-quality flags;
+  - the web app's access control, ownership checks, field locks and Access Log;
+  - migrations.
+- **Not verified in a real spreadsheet/web app:**
+  - actual trigger latency (how quickly the simple `onEdit` runs after a stage change, and that the dropdown refreshes in the open sheet without a reload);
+  - Google's enforcement messages for strict protection;
+  - conditional-format colours over banding;
   - chart appearance;
-  - real protection behaviour;
-  - `Session.getTemporaryActiveUserKey()` availability inside simple triggers;
+  - that the web app loads inside the spreadsheet sidebar iframe (third-party-cookie settings can block it; the sidebar then offers an *open in a new tab* link);
+  - `e.user` / `Session.getActiveUser()` behaviour in your specific Workspace configuration;
   - whether sorting fires onChange;
-  - simple-trigger timing.
+  - real execution times on 10,000 rows.
 
 Run the manual acceptance tests in TESTING.md before go-live.

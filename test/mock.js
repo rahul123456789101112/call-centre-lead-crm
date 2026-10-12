@@ -41,6 +41,7 @@ class Sheet {
     }
     return new Range(this, a, b, c || 1, d || 1);
   }
+  appendRow(vals) { const r = this.getLastRow() + 1; if (r > this.maxRows) this.maxRows = r; this.getRange(r, 1, 1, vals.length).setValues([vals]); return this; }
   getDataRange() { return this.getRange(1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn())); }
   getFilter() { return this.filter; }
   getCharts() { return this.charts.slice(); }
@@ -174,16 +175,16 @@ function makeGlobals(ss) {
     Charts: { ChartType: { BAR: 'BAR', COLUMN: 'COLUMN', LINE: 'LINE', PIE: 'PIE' }, ChartHiddenDimensionStrategy: {} },
     Session: { getActiveUser: () => ({ getEmail: () => activeEmail }), getEffectiveUser: () => ({ getEmail: () => 'admin@example.com' }), getTemporaryActiveUserKey: () => tempKey, getScriptTimeZone: () => 'Asia/Kolkata' },
     PropertiesService: { getDocumentProperties: () => props(docProps), getScriptProperties: () => props(scriptProps) },
-    CacheService: { getDocumentCache: () => ({ get: k => cache[k] || null, put: (k, v) => { cache[k] = v; } }) },
+    CacheService: { getDocumentCache: () => ({ get: k => cache[k] || null, put: (k, v) => { cache[k] = v; }, remove: k => { delete cache[k]; } }) },
     LockService: { getDocumentLock: () => ({ tryLock: () => true, waitLock() {}, releaseLock() {} }) },
-    ScriptApp: { getProjectTriggers: () => triggers, newTrigger: h => { const p = chain(); return new Proxy({}, { get(t, k) { if (k === 'create') return () => triggers.push({ getHandlerFunction: () => h }); return () => this.self; }, }) && (function mk() { const o = new Proxy({}, { get(t, k) { if (k === 'create') return () => { triggers.push({ getHandlerFunction: () => h }); }; return () => o; } }); return o; })(); }, deleteTrigger() {} },
+    ScriptApp: { getService: () => ({ getUrl: () => 'https://script.google.com/a/macros/x/s/ABC/exec' }), getProjectTriggers: () => triggers, newTrigger: h => { const p = chain(); return new Proxy({}, { get(t, k) { if (k === 'create') return () => triggers.push({ getHandlerFunction: () => h }); return () => this.self; }, }) && (function mk() { const o = new Proxy({}, { get(t, k) { if (k === 'create') return () => { triggers.push({ getHandlerFunction: () => h }); }; return () => o; } }); return o; })(); }, deleteTrigger() {} },
     Utilities: {
       formatDate: fmtDate,
       computeDigest: (alg, s) => Array.from(require('crypto').createHash('md5').update(s).digest()),
-      base64Encode: a => Buffer.from(a.map(x => x & 255)).toString('base64'),
+      base64Encode: a => (typeof a === 'string' ? Buffer.from(a) : Buffer.from(a.map(x => x & 255))).toString('base64'),
       DigestAlgorithm: { MD5: 'MD5' }, Charset: { UTF_8: 'UTF-8' }
     },
-    HtmlService: { createHtmlOutputFromFile: () => chain(), createHtmlOutput: (html) => { const w = new Proxy({}, { get: (t, k) => k === '__msg' ? html : () => w }); return w; } },
+    HtmlService: { XFrameOptionsMode: { ALLOWALL: 'ALLOWALL' }, createTemplateFromFile: (n) => { const t = { evaluate: () => { const w = new Proxy({}, { get: (x, k) => k === '__tpl' ? t : () => w }); return w; } }; return t; }, createHtmlOutputFromFile: () => chain(), createHtmlOutput: (html) => { const w = new Proxy({}, { get: (t, k) => k === '__msg' ? html : () => w }); return w; } },
     MailApp: { sendEmail() {}, getRemainingDailyQuota: () => 100 },
     _state: { docProps, scriptProps, cache }
   };

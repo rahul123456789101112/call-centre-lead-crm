@@ -137,7 +137,27 @@
     show('formMsg', 'err', 'Error: ' + esc(err && err.message ? err.message : err) + '<br>Your entry was not lost - press Save again.');
   }
 
+  /** Counsellors (strict protection): show the counsellor web app, which saves as the CRM owner. */
+  function renderWebApp(c) {
+    document.body.innerHTML = '';
+    if (!c.webAppUrl) {
+      document.body.innerHTML = '<h2>Log Follow-Up</h2><div class="msg err">The counsellor web app has not been deployed yet. ' +
+        'Ask a CRM administrator to deploy it (docs/SETUP.md, "Counsellor web app").</div>';
+      return;
+    }
+    var bar = document.createElement('div');
+    bar.style.cssText = 'font-size:11px;margin:0 0 6px';
+    bar.innerHTML = 'Counsellor web app - <a href="' + esc(c.webAppUrl) + '" target="_blank" rel="noopener">open in a new tab</a> if it does not load below.';
+    var frame = document.createElement('iframe');
+    frame.src = c.webAppUrl;
+    frame.style.cssText = 'border:0;width:100%;height:calc(100vh - 40px)';
+    document.body.style.padding = '6px';
+    document.body.appendChild(bar);
+    document.body.appendChild(frame);
+  }
+
   function init(c) {
+    if (c.useWebApp) { renderWebApp(c); return; }
     ctx = c;
     var who = $('who');
     if (c.actor.name) {

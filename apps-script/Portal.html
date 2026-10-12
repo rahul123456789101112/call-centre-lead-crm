@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root { --navy:#1F3864; --blue:#2E75B6; --red:#C0392B; --amber:#B9770E; --green:#117A65; --muted:#5F6B76; --line:#D5D8DC; --bg:#F4F6F9; --locked:#F2F3F4; }
+    * { box-sizing: border-box; }
+    body { font-family: Roboto, Arial, sans-serif; font-size: 14px; color: #202124; margin: 0; background: #fff; }
+    header { background: var(--navy); color: #fff; padding: 10px 14px; position: sticky; top: 0; z-index: 2; }
+    header h1 { font-size: 16px; margin: 0; }
+    header .who { font-size: 12px; opacity: .85; }
+    .stats { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .chip { background: rgba(255,255,255,.15); border-radius: 12px; padding: 2px 9px; font-size: 12px; }
+    main { padding: 10px 14px 40px; max-width: 900px; margin: 0 auto; }
+    .tabs { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+    .tabs button { border: 1px solid var(--line); background: #fff; border-radius: 16px; padding: 5px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+    .tabs button.on { background: var(--navy); color: #fff; border-color: var(--navy); }
+    input, select, textarea { width: 100%; padding: 7px 8px; border: 1px solid var(--line); border-radius: 4px; font: inherit; background: #fff; }
+    textarea { min-height: 70px; resize: vertical; }
+    .card { border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; margin-bottom: 7px; cursor: pointer; background: #fff; }
+    .card:hover { border-color: var(--blue); }
+    .card .t { font-weight: 700; color: var(--navy); }
+    .card .s { font-size: 12px; color: var(--muted); }
+    .due { color: #7D6608; font-weight: 700; }
+    .over { color: var(--red); font-weight: 700; }
+    .btn { padding: 8px 14px; border: 1px solid var(--navy); border-radius: 4px; background: var(--navy); color: #fff; cursor: pointer; font: inherit; font-weight: 600; }
+    .btn.sec { background: #fff; color: var(--navy); }
+    .btn:disabled { opacity: .55; cursor: wait; }
+    h2 { font-size: 16px; color: var(--navy); margin: 14px 0 6px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 12px; }
+    .f label { display: block; font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
+    .f .ro { padding: 7px 8px; background: var(--locked); border: 1px solid var(--line); border-radius: 4px; min-height: 34px; color: #2C3E50; }
+    .f .ro.lockico::after { content: " (locked)"; font-size: 10px; color: var(--muted); }
+    .msg { padding: 8px 10px; border-radius: 4px; font-size: 13px; margin: 8px 0; display: none; }
+    .msg.ok { display: block; background: #D5F5E3; color: #145A32; }
+    .msg.err { display: block; background: #FADBD8; color: #78281F; }
+    .msg.info { display: block; background: #EBF5FB; color: #1B4F72; }
+    .hist div { border-top: 1px dashed var(--line); padding: 5px 0; font-size: 12px; }
+    .hist .m { color: var(--muted); }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .row > * { flex: 1 1 160px; }
+    .back { margin: 4px 0 6px; }
+    .note { font-size: 11px; color: var(--muted); }
+    a { color: var(--blue); }
+    @media (max-width: 420px) { main { padding: 8px; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Lead CRM - My Leads</h1>
+    <div class="who" id="who">Loading...</div>
+    <div class="stats" id="stats"></div>
+  </header>
+  <main>
+    <div id="listView">
+      <div class="tabs" id="tabs">
+        <button data-f="due" class="on">Due &amp; overdue</button>
+        <button data-f="open">All open</button>
+        <button data-f="all">All my leads</button>
+      </div>
+      <input id="search" placeholder="Search Lead ID, name or mobile" autocomplete="off">
+      <div id="listMsg" class="msg"></div>
+      <div id="list" style="margin-top:8px"></div>
+    </div>
+
+    <div id="leadView" style="display:none">
+      <button class="btn sec back" id="backBtn">&larr; Back to list</button>
+      <div id="leadTitle" class="card" style="cursor:default"></div>
+
+      <h2>Lead details</h2>
+      <div class="note">Grey fields are locked. Change the others and press <b>Save changes</b>.</div>
+      <div class="grid" id="fields" style="margin-top:6px"></div>
+      <div style="margin-top:10px"><button class="btn" id="saveBtn">Save changes</button></div>
+      <div id="saveMsg" class="msg"></div>
+
+      <h2>Log a follow-up</h2>
+      <div class="row">
+        <div class="f" id="fuCnsWrap" style="display:none"><label>Counsellor *</label><select id="fuCns"></select></div>
+        <div class="f"><label>Activity type *</label><select id="fuType"></select></div>
+        <div class="f"><label>Contact outcome *</label><select id="fuOutcome"></select></div>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <div class="f"><label>Next follow-up date <span id="nextReq">*</span></label><input type="date" id="fuNext"></div>
+        <div class="f"><label>Activity date &amp; time (leave for now)</label><input type="datetime-local" id="fuTime"></div>
+      </div>
+      <div class="f" style="margin-top:6px"><label>Remarks <span id="remReq">*</span></label><textarea id="fuRemarks" maxlength="2000"></textarea></div>
+      <div style="margin-top:10px"><button class="btn" id="fuBtn">Save follow-up</button></div>
+      <div id="fuMsg" class="msg"></div>
+
+      <h2>Recent activity</h2>
+      <div class="hist" id="hist"></div>
+    </div>
+  </main>
+
+<script>
+  var BOOT = <?!= boot ?>;
+  var ctx = null, lead = null, filter = 'due', busy = false, subId = newId(), lastCopy = 0;
+
+  function $(id) { return document.getElementById(id); }
+  function newId() { return 'W' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function msg(id, cls, html) { $(id).className = 'msg ' + cls; $(id).innerHTML = html; }
+  function hideMsg(id) { $(id).className = 'msg'; $(id).innerHTML = ''; }
+  function opts(values, selected, blank) {
+    var h = blank !== null ? '<option value="">' + esc(blank || '') + '</option>' : '';
+    values.forEach(function (v) { h += '<option value="' + esc(v) + '"' + (v === selected ? ' selected' : '') + '>' + esc(v) + '</option>'; });
+    return h;
+  }
+  function fail(id) { return function (e) { busy = false; enable(true); msg(id, 'err', esc(e && e.message ? e.message : e)); }; }
+  function enable(on) { ['saveBtn', 'fuBtn'].forEach(function (b) { $(b).disabled = !on; }); }
+  function run() { return google.script.run; }
+
+  function start(c) {
+    ctx = c;
+    $('who').textContent = (c.user.name || c.user.email) + (c.user.admin ? ' (administrator - all leads)' : '');
+    $('fuType').innerHTML = opts(c.activityTypes.map(function (a) { return a.type; }), '', '- select -');
+    $('fuOutcome').innerHTML = opts(c.outcomes, '', '- select -');
+    if (!c.user.name) { $('fuCnsWrap').style.display = ''; $('fuCns').innerHTML = opts(c.counsellors, '', '- select -'); }
+    $('fuNext').min = c.today; $('fuNext').max = c.maxNextFu;
+    $('remReq').style.display = c.rules.requireRemarks ? '' : 'none';
+    if (BOOT.lead) openLead(BOOT.lead); else loadList();
+  }
+
+  function loadList() {
+    msg('listMsg', 'info', 'Loading...');
+    run().withSuccessHandler(showList).withFailureHandler(fail('listMsg')).portalListLeads(filter, $('search').value);
+  }
+
+  function showList(res) {
+    hideMsg('listMsg');
+    var s = res.stats;
+    $('stats').innerHTML = '<span class="chip">Due/overdue: ' + s.due + '</span><span class="chip">Overdue: ' + s.overdue +
+      '</span><span class="chip">Open: ' + s.open + '</span><span class="chip">Total: ' + s.total + '</span>';
+    if (!res.leads.length) { $('list').innerHTML = '<div class="note">No leads match.</div>'; return; }
+    $('list').innerHTML = res.leads.map(function (l) {
+      var when = l.next ? (l.overdue ? '<span class="over">Overdue: ' + esc(l.next) + '</span>' : l.due ? '<span class="due">Due today</span>' : 'Next: ' + esc(l.next)) : 'No next follow-up';
+      return '<div class="card" data-id="' + esc(l.id) + '"><div class="t">' + esc(l.id) + ' - ' + esc(l.name || '(no name)') + '</div>' +
+        '<div class="s">' + esc(l.mobile) + ' | ' + esc(l.stage) + (l.substage ? ' / ' + esc(l.substage) : '') + ' | ' + esc(l.status) +
+        (ctx.user.admin ? ' | ' + esc(l.owner || 'Unassigned') : '') + '<br>' + when + '</div></div>';
+    }).join('') + (res.total > res.leads.length ? '<div class="note">Showing ' + res.leads.length + ' of ' + res.total + ' - refine the search.</div>' : '');
+    Array.prototype.forEach.call(document.querySelectorAll('#list .card'), function (el) {
+      el.onclick = function () { openLead(el.getAttribute('data-id')); };
+    });
+  }
+
+  function openLead(id) {
+    $('listView').style.display = 'none';
+    $('leadView').style.display = '';
+    ['saveMsg', 'fuMsg'].forEach(hideMsg);
+    $('fields').innerHTML = 'Loading...';
+    run().withSuccessHandler(showLead).withFailureHandler(function (e) {
+      $('fields').innerHTML = '';
+      msg('saveMsg', 'err', esc(e && e.message ? e.message : e));
+    }).portalGetLead(id);
+  }
+
+  function fieldOptions(f) {
+    var v = lead.values;
+    switch (f.key) {
+      case 'STAGE': return ctx.stages.map(function (s) { return s.name; });
+      case 'SUBSTAGE': var st = ctx.stages.filter(function (s) { return s.name === ($('f_STAGE') ? $('f_STAGE').value : v.STAGE); })[0]; return st ? st.subs : [];
+      case 'STATUS': return ctx.statuses;
+      case 'PRIORITY': return ctx.priorities;
+      case 'OUTCOME': return ctx.outcomes;
+      case 'SOURCE': return ctx.sources;
+      case 'OWNER': return ctx.counsellors;
+      default: return [];
+    }
+  }
+
+  function showLead(l) {
+    lead = l;
+    var v = l.values;
+    $('leadTitle').innerHTML = '<div class="t">' + esc(l.id) + ' - ' + esc(v.NAME || '(no name)') + '</div><div class="s">' +
+      (v.MOBILE ? '<a href="tel:' + esc(v.MOBILE) + '">' + esc(v.MOBILE) + '</a>' : '') + (v.EMAIL ? ' | ' + esc(v.EMAIL) : '') + '</div>';
+    $('fields').innerHTML = ctx.fields.map(function (f) {
+      var val = v[f.key];
+      if (!f.editable) return '<div class="f"><label>' + esc(f.label) + '</label><div class="ro lockico">' + esc(val === '' ? '-' : val) + '</div></div>';
+      var input;
+      if (f.type === 'list') {
+        var list = fieldOptions(f).slice();
+        if (val && list.indexOf(val) < 0) list.unshift(val);
+        input = '<select id="f_' + f.key + '">' + opts(list, val, '') + '</select>';
+      } else if (f.type === 'date') {
+        input = '<input type="date" id="f_' + f.key + '" value="' + esc(val) + '">';
+      } else if (f.type === 'textarea') {
+        input = '<textarea id="f_' + f.key + '">' + esc(val) + '</textarea>';
+      } else {
+        input = '<input id="f_' + f.key + '" value="' + esc(val) + '">';
+      }
+      return '<div class="f"><label>' + esc(f.label) + '</label>' + input + '</div>';
+    }).join('');
+    if ($('f_STAGE') && $('f_SUBSTAGE')) {
+      $('f_STAGE').onchange = function () {
+        $('f_SUBSTAGE').innerHTML = opts(fieldOptions({ key: 'SUBSTAGE' }), '', '');   // stage changed: substage cleared
+        updateNextReq();
+      };
+    }
+    if ($('f_STATUS')) $('f_STATUS').onchange = updateNextReq;
+    $('hist').innerHTML = (l.recent || []).map(function (h) {
+      return '<div><span class="m">' + esc(h.time) + ' - ' + esc(h.type) + (h.outcome ? ' / ' + esc(h.outcome) : '') + ' - ' + esc(h.counsellor) +
+        '</span><br>' + esc(h.remarks) + '</div>';
+    }).join('') || '<div class="note">No activity yet.</div>';
+    $('fuTime').value = ''; $('fuTime').dataset.touched = '';
+    updateNextReq();
+  }
+
+  function currentStatus() { return $('f_STATUS') ? $('f_STATUS').value : lead.values.STATUS; }
+  function updateNextReq() {
+    var req = ctx.rules.requireNextFu && ctx.closedStatuses.indexOf(currentStatus()) < 0;
+    $('nextReq').style.display = req ? '' : 'none';
+    return req;
+  }
+
+  function saveLead() {
+    if (busy) return;
+    var changes = {};
+    ctx.fields.forEach(function (f) {
+      if (!f.editable || !$('f_' + f.key)) return;
+      var nv = $('f_' + f.key).value;
+      if (String(nv) !== String(lead.values[f.key] == null ? '' : lead.values[f.key])) changes[f.key] = nv;
+    });
+    if (!Object.keys(changes).length) { msg('saveMsg', 'info', 'Nothing changed.'); return; }
+    busy = true; enable(false); msg('saveMsg', 'info', 'Saving...');
+    run().withSuccessHandler(function (res) {
+      busy = false; enable(true);
+      if (!res.ok) { msg('saveMsg', 'err', (res.errors || ['Not saved.']).map(esc).join('<br>')); return; }
+      msg('saveMsg', 'ok', res.unchanged ? 'Nothing changed.' : 'Saved.' + (res.messages && res.messages.length ? '<br>' + res.messages.map(esc).join('<br>') : ''));
+      showLead(res.lead);
+    }).withFailureHandler(fail('saveMsg')).portalSaveLead(lead.id, changes);
+  }
+
+  function saveFollowUp() {
+    if (busy) return;
+    var errs = [];
+    if (!ctx.user.name && !$('fuCns').value) errs.push('Select the counsellor.');
+    if (!$('fuType').value) errs.push('Select the activity type.');
+    if (!$('fuOutcome').value) errs.push('Select the contact outcome.');
+    if (ctx.rules.requireRemarks && !$('fuRemarks').value.trim()) errs.push('Enter remarks.');
+    if (updateNextReq() && !$('fuNext').value) errs.push('Enter the next follow-up date (required while the lead is open).');
+    if (errs.length) { msg('fuMsg', 'err', errs.map(esc).join('<br>')); return; }
+    busy = true; enable(false); msg('fuMsg', 'info', 'Saving...');
+    run().withSuccessHandler(function (res) {
+      busy = false; enable(true);
+      if (!res.ok) { msg('fuMsg', 'err', (res.errors || ['Not saved.']).map(esc).join('<br>')); if (res.duplicate) subId = newId(); return; }
+      subId = newId();
+      msg('fuMsg', 'ok', 'Saved as ' + esc(res.activityId) + '.');
+      $('fuRemarks').value = ''; $('fuOutcome').value = ''; $('fuType').value = ''; $('fuNext').value = '';
+      openLead(lead.id);
+    }).withFailureHandler(fail('fuMsg')).portalSubmitFollowUp({
+      submissionId: subId, leadId: lead.id, counsellor: ctx.user.name || $('fuCns').value,
+      activityType: $('fuType').value, outcome: $('fuOutcome').value,
+      activityTime: $('fuTime').dataset.touched ? $('fuTime').value : '',
+      stage: lead.values.STAGE || '', substage: lead.values.SUBSTAGE || '', status: '',
+      nextFollowUp: $('fuNext').value, remarks: $('fuRemarks').value.trim()
+    });
+  }
+
+  // Best-effort audit of copy actions (cannot stop screenshots or other ways of copying).
+  document.addEventListener('copy', function () {
+    if (Date.now() - lastCopy < 30000) return;
+    lastCopy = Date.now();
+    google.script.run.portalLogClientEvent('copy', lead ? lead.id : '(list)');
+  });
+
+  $('tabs').onclick = function (e) {
+    var f = e.target.getAttribute && e.target.getAttribute('data-f');
+    if (!f) return;
+    filter = f;
+    Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (b) { b.className = b === e.target ? 'on' : ''; });
+    loadList();
+  };
+  var timer = null;
+  $('search').oninput = function () { clearTimeout(timer); timer = setTimeout(loadList, 400); };
+  $('backBtn').onclick = function () { $('leadView').style.display = 'none'; $('listView').style.display = ''; BOOT.lead = ''; loadList(); };
+  $('saveBtn').onclick = saveLead;
+  $('fuBtn').onclick = saveFollowUp;
+  $('fuTime').oninput = function () { this.dataset.touched = '1'; };
+
+  google.script.run.withSuccessHandler(start).withFailureHandler(function (e) {
+    $('who').textContent = /ACCESS_DENIED/.test(String(e && e.message)) ? 'Access denied - your account is not an active counsellor.' : 'Could not load: ' + (e && e.message ? e.message : e);
+  }).portalInit();
+</script>
+</body>
+</html>

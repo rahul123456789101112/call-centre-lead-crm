@@ -17,9 +17,10 @@ var SHEET = {
   STAGES: 'Stage Master',
   COUNSELLORS: 'Counsellor Master',
   DASHBOARD: 'Dashboard',
-  SETTINGS: 'Lists & Settings'
+  SETTINGS: 'Lists & Settings',
+  ACCESS_LOG: 'Access Log'
 };
-var SHEET_ORDER = [SHEET.LEADS, SHEET.LOG, SHEET.STAGES, SHEET.COUNSELLORS, SHEET.DASHBOARD, SHEET.SETTINGS];
+var SHEET_ORDER = [SHEET.LEADS, SHEET.LOG, SHEET.STAGES, SHEET.COUNSELLORS, SHEET.DASHBOARD, SHEET.SETTINGS, SHEET.ACCESS_LOG];
 
 var LEAD_DATA_ROWS = 10000;   // pre-sized data rows on Lead Management
 var LOG_INITIAL_ROWS = 5000;  // pre-sized rows on Follow-Up Log (grows automatically)
@@ -51,10 +52,12 @@ function defaultCustomName_(slot) { return 'Custom Field ' + slot; }
 function customCol_(slot) { return LC.CUSTOM_FIRST + slot - 1; }
 
 /** Columns whose cells are produced by an ARRAYFORMULA in the header row. */
-var LEAD_FORMULA_COLS = [LC.FU_COUNT, LC.ACTIVITY_TOTAL, LC.DQ_FLAGS];
-/** Columns written only by the script. */
+var LEAD_FORMULA_COLS = [LC.FU_COUNT, LC.ACTIVITY_TOTAL];
+/** Columns written only by the script (Data Quality Flags are computed by the script, not a formula). */
 var LEAD_SYSTEM_COLS = [LC.ID, LC.UPDATED_BY, LC.LAST_ACTIVITY, LC.CREATED, LC.LAST_FU_DATE,
-  LC.STAGE_CHANGED, LC.ASSIGNED_DATE, LC.PREV_OWNER, LC.SNAPSHOT];
+  LC.STAGE_CHANGED, LC.ASSIGNED_DATE, LC.PREV_OWNER, LC.DQ_FLAGS, LC.SNAPSHOT];
+/** Default "Counsellor-Locked Fields" (Lists & Settings). System and formula columns are always locked. */
+var DEFAULT_LOCKED_FIELDS = ['Lead ID', 'Mobile Number', 'Email ID', 'Assigned Counsellor', 'Lead Created Date', 'Lead Source'];
 
 /* ---------- Follow-Up Log columns ---------- */
 var LG = {
@@ -79,8 +82,11 @@ var LS = {
   PRIORITY: 1, OUTCOME: 2, SOURCE: 3, STATUS: 4, ACT_TYPE: 5, ACT_CATEGORY: 6, ACT_SIDEBAR: 7,
   ACTIVE_VALUES: 8, BUCKET_LABEL: 10, BUCKET_MIN: 11, BUCKET_MAX: 12, SET_KEY: 14, SET_VALUE: 15,
   SET_DESC: 16, H_ACTIVE_STAGES: 18, H_ALL_STAGES: 19, H_ACTIVE_CNS: 20, H_CNS_FILTER: 21,
-  H_PERIODS: 22, H_PAIRS: 23, CF_SLOT: 26, CF_NAME: 27, CF_ACTIVE: 28
+  H_PERIODS: 22, H_PAIRS: 23, CF_SLOT: 26, CF_NAME: 27, CF_ACTIVE: 28, LOCKED: 30
 };
+
+/* ---------- Access Log (portal / sheet access audit) ---------- */
+var AL_HEADERS = ['Timestamp', 'User Email', 'Counsellor', 'Action', 'Lead ID', 'Details', 'Source'];
 
 var ACTIVE = 'Active';
 var INACTIVE = 'Inactive';
@@ -154,7 +160,8 @@ var NAMED = {
 
 var PROP = {
   LEAD_SEQ: 'LEAD_SEQ', ACT_SEQ: 'ACT_SEQ', EDIT_MODE: 'EDIT_MODE', USER_KEY_PREFIX: 'UK_',
-  DASH_LAYOUT: 'DASH_LAYOUT', LAST_SUBSTAGE_REFRESH: 'LAST_SUBSTAGE_REFRESH'
+  DASH_LAYOUT: 'DASH_LAYOUT', LAST_SUBSTAGE_REFRESH: 'LAST_SUBSTAGE_REFRESH',
+  SUBSTAGE_MAP: 'SUBSTAGE_MAP_V1', WEB_APP_URL: 'WEB_APP_URL', DASH_CHART_COUNTS: 'DASH_CHART_COUNTS'
 };
 
 /* ================================================================== */
@@ -624,8 +631,81 @@ function trackedKeyForCol_(col) {
 /* Edit trigger mode                                                   */
 /* ================================================================== */
 
+/**
+ * 'installable' (default): system writes are done by the installable onEdit trigger running as the
+ * owner, so locked columns can use STRICT protection. 'simple': legacy mode for setups without the
+ * installable trigger; protections fall back to warning-only.
+ */
 function getEditMode_() {
   try {
-    return PropertiesService.getDocumentProperties().getProperty(PROP.EDIT_MODE) || 'simple';
-  } catch (e) { return 'simple'; }
+    return PropertiesService.getDocumentProperties().getProperty(PROP.EDIT_MODE) || 'installable';
+  } catch (e) { return 'installable'; }
+}
+
+function strictMode_() { return getEditMode_() === 'installable'; }
+
+/* ================================================================== */
+/* Locked (read-only for counsellors) columns                          */
+/* ================================================================== */
+
+/** Column numbers counsellors may not edit: system + formula columns + Lists & Settings > Counsellor-Locked Fields. */
+function lockedCols_() {
+  return memo_('lockedCols', function () {
+    var cols = LEAD_SYSTEM_COLS.concat(LEAD_FORMULA_COLS);
+    var names = [];
+    var sh = ss_().getSheetByName(SHEET.SETTINGS);
+    if (sh && sh.getMaxColumns() >= LS.LOCKED && str_(sh.getRange(1, LS.LOCKED).getValue())) {
+      var last = Math.max(sh.getLastRow(), 2);
+      names = sh.getRange(2, LS.LOCKED, last - 1, 1).getValues().map(function (r) { return str_(r[0]); }).filter(String);
+    } else {
+      names = DEFAULT_LOCKED_FIELDS.slice();
+    }
+    var customNames = {};
+    try { readCustomFields_().forEach(function (f) { customNames[customCol_(f.slot)] = f.name; }); } catch (e) { /* settings not built yet */ }
+    names.forEach(function (n) {
+      for (var c = 1; c <= LEAD_COLS; c++) {
+        if (same_(LEAD_HEADERS[c - 1], n) || (customNames[c] && same_(customNames[c], n))) cols.push(c);
+      }
+    });
+    return cols.filter(function (c, i) { return cols.indexOf(c) === i; }).sort(function (a, b) { return a - b; });
+  });
+}
+
+function isLockedCol_(col) { return lockedCols_().indexOf(col) >= 0; }
+
+/** Groups sorted column numbers into [[first, last], ...] runs of adjacent columns. */
+function colRuns_(cols) {
+  var sorted = cols.slice().sort(function (a, b) { return a - b; });
+  var runs = [];
+  sorted.forEach(function (c) {
+    var last = runs[runs.length - 1];
+    if (last && c === last[1] + 1) last[1] = c; else runs.push([c, c]);
+  });
+  return runs;
+}
+
+/** Writes the given columns of a lead row back to the sheet, one setValues per run of adjacent columns. */
+function writeRowCols_(sheet, rowNum, row, cols) {
+  colRuns_(cols.filter(function (c) { return LEAD_FORMULA_COLS.indexOf(c) < 0; })).forEach(function (run) {
+    sheet.getRange(rowNum, run[0], 1, run[1] - run[0] + 1).setValues([row.slice(run[0] - 1, run[1])]);
+  });
+}
+
+/* ================================================================== */
+/* Cached stage -> substage map (used by the fast onEdit path)          */
+/* ================================================================== */
+
+/** {lowerStage: {name, subs:[...]}} of ACTIVE stages; cached for 6 h, cleared when Stage Master changes. */
+function cachedSubstageMap_() {
+  var cache = CacheService.getDocumentCache();
+  var raw = cache.get(PROP.SUBSTAGE_MAP);
+  if (raw) { try { return JSON.parse(raw); } catch (e) { /* rebuild */ } }
+  var map = {};
+  getStageInfo_().activeStages.forEach(function (s) { map[s.name.toLowerCase()] = { name: s.name, subs: s.subs }; });
+  try { cache.put(PROP.SUBSTAGE_MAP, JSON.stringify(map), 21600); } catch (e) { /* too large: uncached */ }
+  return map;
+}
+
+function clearSubstageMapCache_() {
+  try { CacheService.getDocumentCache().remove(PROP.SUBSTAGE_MAP); } catch (e) { /* ignore */ }
 }

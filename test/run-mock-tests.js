@@ -12,11 +12,16 @@ function ok(cond, msg) { console.log((cond ? 'PASS ' : 'FAIL ') + msg); if (!con
 function fresh() { vm.runInContext('clearMemo_()', g); }
 const LM = () => ss.getSheetByName('Lead Management'), LOG = () => ss.getSheetByName('Follow-Up Log');
 function cell(sh, a1) { return sh.getRange(a1).getValue(); }
+let currentEmail = 'admin@example.com';
+// Simulates a user edit: the simple trigger (fast path) then the installable trigger (runs as owner, e.user = editor).
 function edit(sheetName, a1, value, oldValue) {
   const sh = ss.getSheetByName(sheetName); const r = sh.getRange(a1);
   if (value !== undefined) { if (Array.isArray(value)) r.setValues(value); else r.setValue(value); }
-  fresh(); g.onEdit({ range: r, value: Array.isArray(value) ? undefined : value, oldValue, source: ss });
+  const ev = { range: r, value: Array.isArray(value) ? undefined : value, oldValue, source: ss };
+  fresh(); g.onEdit(ev);
+  fresh(); g.onEditInstallable(Object.assign({}, ev, { triggerUid: 't1', user: { getEmail: () => currentEmail } }));
 }
+function as(email, key) { currentEmail = email; M.setUser(email, key || 'TK'); }
 function logRows() { const l = LOG(); const n = l.getLastRow(); return n < 2 ? [] : l.getRange(2, 1, n - 1, 18).getValues(); }
 
 // ---------- quick-test setup (1,000 rows) on a separate workbook ----------
@@ -85,7 +90,7 @@ LM().getRange('F1').setValue('Town'); edit('Lead Management', 'F1', undefined);
 ok(cell(LS_(), 'AA3') === 'Town', 'renaming the header updates the table');
 
 // ---------- new lead ----------
-M.setUser('caller1@example.com', 'TK1');
+as('caller1@example.com', 'TK1');
 const cm = ss.getSheetByName('Counsellor Master');
 cm.getRange('C2').setValue('caller1@example.com');
 edit('Lead Management', 'B2', 'Ravi Kumar');
@@ -106,8 +111,15 @@ ok(cell(LM(), 'AE2') instanceof Date, 'Lead Assigned Date stamped');
 edit('Lead Management', 'O2', 'Sample Counsellor 2', 'Sample Counsellor 1');
 ok(cell(LM(), 'AF2') === 'Sample Counsellor 1', 'Previous Counsellor kept on reassignment');
 
-// ---------- stage change clears invalid substage ----------
-edit('Lead Management', 'P2', 'Interested', 'New Lead');
+// ---------- stage change: fast path (simple onEdit only) clears substage + sets new dropdown first ----------
+{
+  const r = LM().getRange('P2'); r.setValue('Interested');
+  fresh(); g.onEdit({ range: r, value: 'Interested', oldValue: 'New Lead', source: ss });
+  ok(cell(LM(), 'Q2') === '' && JSON.stringify(LM().getRange('Q2').getDataValidation().calls).includes('Highly Interested'),
+    'fast path: substage cleared and new dropdown set before any logging');
+  ok(!logRows().some(r => r[5] === 'Stage Updated'), 'fast path writes no log entries');
+  fresh(); g.onEditInstallable({ range: r, value: 'Interested', oldValue: 'New Lead', source: ss, triggerUid: 't', user: { getEmail: () => currentEmail } });
+}
 ok(cell(LM(), 'Q2') === '', 'invalid substage cleared after stage change');
 rows = logRows();
 ok(rows.some(r => r[5] === 'Stage Updated' && r[14] === 'New Lead' && r[15] === 'Interested'), 'Stage Updated audit old->new');
@@ -138,11 +150,18 @@ ok(cell(LM(), 'A2') === 'LD-000001', 'manual Lead ID edit reverted');
 edit('Lead Management', 'V2', 5);
 ok(cell(LM(), 'V2') === '', 'formula column entry cleared');
 
-// ---------- follow-up via sidebar ----------
+// ---------- follow-ups: counsellors use the web app (runs as owner); the sidebar embeds it ----------
+edit('Lead Management', 'O2', 'Sample Counsellor 1', 'Sample Counsellor 2');
 fresh();
-const ctx = g.getFollowUpContext();
-ok(ctx.actor.name === 'Sample Counsellor 1' && ctx.stages.length === 7, 'sidebar context (stages=' + ctx.stages.length + ')');
+const sideCtx = g.getFollowUpContext();
+ok(sideCtx.useWebApp && sideCtx.webAppUrl.indexOf('/exec?embed=1&lead=LD-') > 0 || sideCtx.webAppUrl.indexOf('/exec?embed=1') > 0, 'counsellor sidebar embeds the web app: ' + sideCtx.webAppUrl);
+fresh();
+ok(!g.submitFollowUp({ leadId: 'LD-000001' }).ok, 'counsellor cannot write through the sidebar under strict protection');
+fresh();
+const ctx = g.portalInit();
+ok(ctx.user.name === 'Sample Counsellor 1' && ctx.stages.length === 7, 'web app context (stages=' + ctx.stages.length + ')');
 ok(!ctx.activityTypes.some(a => a.type === 'Lead Created'), 'system activity types hidden from form');
+g.submitFollowUp = g.portalSubmitFollowUp;   // the follow-up tests below run through the web app
 const today = vm.runInContext('todayKey_()', g), tomorrow = vm.runInContext('addDaysKey_(todayKey_(),1)', g);
 fresh();
 let res = g.submitFollowUp({ submissionId: 'S1', leadId: 'LD-000001', counsellor: 'Sample Counsellor 1', activityType: 'Outbound Call', outcome: 'Interested', stage: 'Interested', substage: 'Highly Interested', status: 'Open', nextFollowUp: tomorrow, remarks: 'Asked for fees' });
@@ -175,22 +194,28 @@ ok(rows.filter(r => r[1] === 'LD-000001' && r[12] === 'Contact').length === 2, '
 ok(rows.some(r => r[13] === 'Lead Status' && r[15] === 'Converted' && r[12] === 'System'), 'conversion event logged (auto status)');
 ok(new Set(rows.map(r => r[0])).size === rows.length, 'activity IDs unique (' + rows.length + ' rows)');
 
-// ---------- identity fallback via temporary key ----------
-M.setUser('', 'TK1');
+// ---------- identity: installable trigger uses e.user (Workspace) ----------
+as('caller1@example.com', 'TK1');
 edit('Lead Management', 'Y2', 'note by caller');
-ok(cell(LM(), 'W2') === 'Sample Counsellor 1', 'unidentified email resolved via temp-key mapping: ' + cell(LM(), 'W2'));
-M.setUser('', 'TK-unknown');
+ok(cell(LM(), 'W2') === 'Sample Counsellor 1', 'editor identified from e.user in installable trigger: ' + cell(LM(), 'W2'));
+as('', 'TK-unknown');
 edit('Lead Management', 'Y2', 'note 2');
 ok(cell(LM(), 'W2') === 'Unidentified user', 'unknown user labelled: ' + cell(LM(), 'W2'));
+// legacy simple mode: temporary-key mapping
+g._state.docProps.EDIT_MODE = 'simple';
+as('', 'TK1');
+edit('Lead Management', 'Y2', 'note 3');
+ok(cell(LM(), 'W2') === 'Sample Counsellor 1', 'simple mode: email resolved via temp-key mapping');
+g._state.docProps.EDIT_MODE = 'installable';
 
 // ---------- Stage Master: add stage + substage ----------
-M.setUser('admin@example.com', 'TKA');
+as('admin@example.com', 'TKA');
 const sm = ss.getSheetByName('Stage Master');
 sm.getRange('B18:F18').setValues([['Counselling', 'Session Booked', 'demo', 3.5, '']]);
 edit('Stage Master', 'B18:F18', undefined);
 ok(cell(sm, 'A18') === 'STG-017' && cell(sm, 'F18') === 'Active', 'new stage row gets ID + Active');
 fresh();
-ok(g.getFollowUpContext().stages.some(s => s.name === 'Counselling' && s.subs[0] === 'Session Booked'), 'new stage/substage available');
+ok(g.getFollowUpContext().stages.some(s => s.name === 'Counselling' && s.subs[0] === 'Session Booked'), 'new stage/substage available (admin sidebar)');
 // lead in Counselling stage gets the new list
 edit('Lead Management', 'P3', 'Counselling', 'New Lead');
 ok(JSON.stringify(LM().getRange('Q3').getDataValidation().calls).includes('Session Booked'), 'new substage in dependent dropdown');
@@ -207,6 +232,71 @@ ok(cell(cm, 'A5') === 'CNS-004' && cell(cm, 'F5') === 'Active' && cell(cm, 'G5')
 const before = logRows().length;
 edit('Follow-Up Log', 'K2', 'changed', 'New lead entered');
 ok(logRows().length === before + 1 && logRows().pop()[5] === 'Log Edited', 'manual log edit recorded');
+
+// ---------- data-quality flags (script-computed) ----------
+ok(/Duplicate mobile/.test(cell(LM(), 'AH3')) && /Duplicate mobile/.test(cell(LM(), 'AH4')), 'duplicate mobile flagged by script in AH');
+ok(LM().getRange('AH1').getFormula() === '' && cell(LM(), 'AH1') === 'Data Quality Flags', 'AH is a script column, not an ARRAYFORMULA');
+
+// ---------- strict protection of locked columns ----------
+const strictDescs = LM().prot.filter(p => p.warn === false).map(p => p.desc);
+ok(strictDescs.some(d => /: C:D$/.test(d)) && strictDescs.some(d => /: O$/.test(d)) && strictDescs.some(d => /: Z:AA$/.test(d)) && strictDescs.some(d => /: AC:AI$/.test(d)) && strictDescs.some(d => /: A$/.test(d)),
+  'locked columns strictly protected: ' + strictDescs.join(' | '));
+ok(!strictDescs.some(d => /: P|: Y|: AB/.test(d)), 'stage / remarks / status stay editable');
+ok(ss.getSheetByName('Follow-Up Log').prot.some(p => p.warn === false), 'Follow-Up Log strictly protected (script writes as owner)');
+ss.getSheetByName('Lists & Settings').getRange('AD8').setValue('Lead Remarks'); edit('Lists & Settings', 'AD8', undefined);
+ok(LM().prot.some(p => p.warn === false && /: V:AA$/.test(p.desc)), 'adding "Lead Remarks" to Counsellor-Locked Fields locks column Y');
+ss.getSheetByName('Lists & Settings').getRange('AD8').setValue(''); edit('Lists & Settings', 'AD8', undefined);
+ok(!LM().prot.some(p => /: V:AA$/.test(p.desc)) && LM().prot.some(p => /: V:X$/.test(p.desc)), 'removing it unlocks Y again');
+
+// ---------- dashboard (script-computed values) ----------
+fresh(); g.refreshDashboard();
+const lay = JSON.parse(g._state.docProps.DASH_LAYOUT);
+const kpi = name => { const c = lay.cards[name]; return ss.getSheetByName('Dashboard').getRange(c[0], c[1]).getValue(); };
+ok(kpi('Follow-Ups Completed') === 2 && kpi('Unique Leads Contacted') === 1, 'dashboard: 2 follow-ups on one lead = 1 unique lead contacted');
+ok(kpi('Total Leads') === 4 && kpi('Converted Leads') === 1, 'dashboard: total ' + kpi('Total Leads') + ', converted ' + kpi('Converted Leads'));
+ok(Math.abs(kpi('Conversion Rate') - 0.25) < 1e-9, 'dashboard: conversion rate 25%');
+const D = ss.getSheetByName('Dashboard');
+ok(D.getRange(lay.counsellor.data, 2).getValue() === 'Sample Counsellor 1' && D.getRange(lay.counsellor.data, 5).getValue() === 2, 'counsellor report: follow-ups credited');
+ok(D.getRange(lay.stage.data, 2).getValue() === 'New Lead', 'stage report lists stages in order');
+ok(D.getRange('I5').getValue() instanceof Date, 'dashboard refresh timestamp written');
+D.getRange('L4').setValue('Sample Counsellor 2'); edit('Dashboard', 'L4', undefined);
+ok(kpi('Follow-Ups Completed') === 0, 'counsellor filter change refreshes dashboard');
+D.getRange('L4').setValue('All Counsellors'); edit('Dashboard', 'L4', undefined);
+D.getRange('C4').setValue('Yesterday'); edit('Dashboard', 'C4', undefined);
+ok(kpi('Follow-Ups Completed') === 0 && kpi('Total Leads') === 4, 'period change: activity KPIs follow the period, lead totals do not');
+D.getRange('C4').setValue('Last 30 Days'); edit('Dashboard', 'C4', undefined);
+
+// ---------- counsellor web app: access control and access log ----------
+const AL = () => { const a = ss.getSheetByName('Access Log'); return a.getLastRow() < 2 ? [] : a.getRange(2, 1, a.getLastRow() - 1, 7).getValues(); };
+as('stranger@example.com');
+fresh(); g.doGet({ parameter: {} });
+ok(AL().some(r => r[1] === 'stranger@example.com' && r[3] === 'Access Denied'), 'unknown account denied and logged');
+fresh(); let threw = false; try { g.portalListLeads('all', ''); } catch (e) { threw = /ACCESS_DENIED/.test(e.message); }
+ok(threw, 'API calls re-check access');
+as('caller1@example.com', 'TK1');
+fresh(); g.doGet({ parameter: { lead: '</script><x>' } });
+ok(AL().some(r => r[1] === 'caller1@example.com' && r[3] === 'Portal Opened'), 'portal open logged');
+fresh(); const list = g.portalListLeads('all', '');
+ok(list.leads.length === 1 && list.leads[0].id === 'LD-000001', 'counsellor sees only own leads (' + list.leads.map(l => l.id).join(',') + ')');
+ok(AL().some(r => r[3] === 'Leads Listed' && /LD-000001/.test(r[5])), 'list view logged with lead IDs');
+fresh(); threw = false; try { g.portalGetLead(cell(LM(), 'A3')); } catch (e) { threw = /not assigned to you/.test(e.message); }
+ok(threw && AL().some(r => r[3] === 'Access Denied' && r[4] === cell(LM(), 'A3')), 'opening another counsellor\'s lead refused and logged');
+fresh(); const lv = g.portalGetLead('LD-000001');
+ok(lv.values.NAME === 'Ravi Kumar' && !('SNAPSHOT' in lv.values), 'lead view returns allowed fields');
+fresh(); let sv = g.portalSaveLead('LD-000001', { MOBILE: '9999999999' });
+ok(!sv.ok && /cannot be changed/.test(sv.errors[0]) && cell(LM(), 'C6') !== '9999999999', 'locked field (mobile) rejected by server');
+fresh(); sv = g.portalSaveLead('LD-000001', { PRIORITY: 'Hot', CUSTOM_2: 'Pune' });
+ok(sv.ok && cell(LM(), 'R6') === 'Hot' && cell(LM(), 'F6') === 'Pune' && cell(LM(), 'W6') === 'Sample Counsellor 1', 'allowed fields saved with user stamp');
+ok(AL().some(r => r[3] === 'Lead Updated' && /Lead Priority/.test(r[5])), 'edit logged with old -> new values');
+fresh(); sv = g.portalSaveLead('LD-000001', { STAGE: 'Interested' });
+ok(sv.ok && cell(LM(), 'P6') === 'Interested' && cell(LM(), 'Q6') === '' && logRows().some(r => r[1] === 'LD-000001' && r[5] === 'Substage Cleared'), 'web app stage change clears substage + audits');
+fresh(); g.portalLogClientEvent('copy', 'LD-000001');
+ok(AL().some(r => r[3] === 'Copy In Browser (reported)'), 'reported browser copy logged');
+fresh(); g.onOpenInstallable({ user: { getEmail: () => 'admin@example.com' } });
+ok(AL().some(r => r[3] === 'Spreadsheet Opened'), 'spreadsheet open logged by installable onOpen');
+as('admin@example.com', 'TKA');
+fresh(); g.scheduledMaintenance();
+ok(true, 'hourly maintenance ran');
 
 // ---------- bulk process + health ----------
 fresh(); g.processAllLeads();
