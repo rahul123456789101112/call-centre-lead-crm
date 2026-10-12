@@ -17,9 +17,10 @@ var SHEET = {
   STAGES: 'Stage Master',
   COUNSELLORS: 'Counsellor Master',
   DASHBOARD: 'Dashboard',
-  SETTINGS: 'Lists & Settings'
+  SETTINGS: 'Lists & Settings',
+  ACCESS_LOG: 'Access Log'
 };
-var SHEET_ORDER = [SHEET.LEADS, SHEET.LOG, SHEET.STAGES, SHEET.COUNSELLORS, SHEET.DASHBOARD, SHEET.SETTINGS];
+var SHEET_ORDER = [SHEET.LEADS, SHEET.LOG, SHEET.STAGES, SHEET.COUNSELLORS, SHEET.DASHBOARD, SHEET.SETTINGS, SHEET.ACCESS_LOG];
 
 var LEAD_DATA_ROWS = 10000;   // pre-sized data rows on Lead Management
 var LOG_INITIAL_ROWS = 5000;  // pre-sized rows on Follow-Up Log (grows automatically)
@@ -51,10 +52,12 @@ function defaultCustomName_(slot) { return 'Custom Field ' + slot; }
 function customCol_(slot) { return LC.CUSTOM_FIRST + slot - 1; }
 
 /** Columns whose cells are produced by an ARRAYFORMULA in the header row. */
-var LEAD_FORMULA_COLS = [LC.FU_COUNT, LC.ACTIVITY_TOTAL, LC.DQ_FLAGS];
-/** Columns written only by the script. */
+var LEAD_FORMULA_COLS = [LC.FU_COUNT, LC.ACTIVITY_TOTAL];
+/** Columns written only by the script (Data Quality Flags are computed by the script, not a formula). */
 var LEAD_SYSTEM_COLS = [LC.ID, LC.UPDATED_BY, LC.LAST_ACTIVITY, LC.CREATED, LC.LAST_FU_DATE,
-  LC.STAGE_CHANGED, LC.ASSIGNED_DATE, LC.PREV_OWNER, LC.SNAPSHOT];
+  LC.STAGE_CHANGED, LC.ASSIGNED_DATE, LC.PREV_OWNER, LC.DQ_FLAGS, LC.SNAPSHOT];
+/** Default "Counsellor-Locked Fields" (Lists & Settings). System and formula columns are always locked. */
+var DEFAULT_LOCKED_FIELDS = ['Lead ID', 'Mobile Number', 'Email ID', 'Assigned Counsellor', 'Lead Created Date', 'Lead Source'];
 
 /* ---------- Follow-Up Log columns ---------- */
 var LG = {
@@ -79,8 +82,11 @@ var LS = {
   PRIORITY: 1, OUTCOME: 2, SOURCE: 3, STATUS: 4, ACT_TYPE: 5, ACT_CATEGORY: 6, ACT_SIDEBAR: 7,
   ACTIVE_VALUES: 8, BUCKET_LABEL: 10, BUCKET_MIN: 11, BUCKET_MAX: 12, SET_KEY: 14, SET_VALUE: 15,
   SET_DESC: 16, H_ACTIVE_STAGES: 18, H_ALL_STAGES: 19, H_ACTIVE_CNS: 20, H_CNS_FILTER: 21,
-  H_PERIODS: 22, H_PAIRS: 23, CF_SLOT: 26, CF_NAME: 27, CF_ACTIVE: 28
+  H_PERIODS: 22, H_PAIRS: 23, CF_SLOT: 26, CF_NAME: 27, CF_ACTIVE: 28, LOCKED: 30
 };
+
+/* ---------- Access Log (portal / sheet access audit) ---------- */
+var AL_HEADERS = ['Timestamp', 'User Email', 'Counsellor', 'Action', 'Lead ID', 'Details', 'Source'];
 
 var ACTIVE = 'Active';
 var INACTIVE = 'Inactive';
@@ -154,7 +160,9 @@ var NAMED = {
 
 var PROP = {
   LEAD_SEQ: 'LEAD_SEQ', ACT_SEQ: 'ACT_SEQ', EDIT_MODE: 'EDIT_MODE', USER_KEY_PREFIX: 'UK_',
-  DASH_LAYOUT: 'DASH_LAYOUT', LAST_SUBSTAGE_REFRESH: 'LAST_SUBSTAGE_REFRESH'
+  DASH_LAYOUT: 'DASH_LAYOUT', LAST_SUBSTAGE_REFRESH: 'LAST_SUBSTAGE_REFRESH',
+  SUBSTAGE_MAP: 'SUBSTAGE_MAP_V1', WEB_APP_URL: 'WEB_APP_URL', DASH_CHART_COUNTS: 'DASH_CHART_COUNTS',
+  IDENTITY_URL: 'IDENTITY_URL', IDENTITY_SECRET: 'IDENTITY_SECRET'
 };
 
 /* ================================================================== */
@@ -459,10 +467,28 @@ function isActiveCounsellor_(name) {
   return getCounsellors_().some(function (c) { return c.active && same_(c.name, name); });
 }
 
+/**
+ * Canonical form of an email for comparisons. Lower-case; for Gmail addresses dots and "+tags" in the
+ * local part are ignored and googlemail.com = gmail.com (Google treats them as the same account).
+ * Other providers are compared exactly (lower-case), because their rules differ.
+ */
+function normEmail_(email) {
+  var e = str_(email).toLowerCase();
+  var at = e.lastIndexOf('@');
+  if (at < 1) return e;
+  var local = e.substring(0, at), domain = e.substring(at + 1);
+  if (domain === 'gmail.com' || domain === 'googlemail.com') {
+    local = local.split('+')[0].replace(/\./g, '');
+    domain = 'gmail.com';
+  }
+  return local + '@' + domain;
+}
+
+function sameEmail_(a, b) { return !!a && !!b && normEmail_(a) === normEmail_(b); }
+
 function counsellorForEmail_(email) {
   if (!email) return null;
-  var e = email.toLowerCase();
-  return getCounsellors_().filter(function (c) { return c.email === e; })[0] || null;
+  return getCounsellors_().filter(function (c) { return sameEmail_(c.email, email); })[0] || null;
 }
 
 /* ================================================================== */
@@ -477,24 +503,58 @@ function counsellorForEmail_(email) {
  */
 function getActor_(e) {
   var email = '';
-  try { if (e && e.user && e.user.getEmail) email = e.user.getEmail() || ''; } catch (err) { /* not available */ }
-  if (!email) { try { email = Session.getActiveUser().getEmail() || ''; } catch (err) { /* not available */ } }
   var installable = !!(e && e.triggerUid);
-  if (!email && !installable) {
-    // Temporary keys are only trusted when the code runs as the editing user (simple trigger / sidebar).
-    try {
-      var key = Session.getTemporaryActiveUserKey();
-      if (key) email = PropertiesService.getScriptProperties().getProperty(PROP.USER_KEY_PREFIX + key) || '';
-    } catch (err) { /* not available */ }
+  try { if (e && e.user && e.user.getEmail) email = e.user.getEmail() || ''; } catch (err) { /* not available */ }
+  if (!email && !installable) { try { email = Session.getActiveUser().getEmail() || ''; } catch (err) { /* not available */ } }
+  if (!email) {
+    // Personal Google accounts: Google does not reveal the editor's email to a trigger owned by someone
+    // else. The simple onEdit (running AS the editor) stores the editor's temporary key for this edit;
+    // the key maps to an email the user registered by authorising the script (registerCurrentUser_).
+    var key = '';
+    if (installable && e.range) key = waitForEditorKey_(e);
+    else { try { key = Session.getTemporaryActiveUserKey(); } catch (err) { /* not available */ } }
+    if (key) email = PropertiesService.getScriptProperties().getProperty(PROP.USER_KEY_PREFIX + key) || '';
   }
   var c = counsellorForEmail_(email);
   var name = c ? c.name : '';
   return { email: email, name: name, label: name || email || 'Unidentified user' };
 }
 
+/* ---------- Editor key hand-off between the two edit triggers ---------- */
+
+function editHandoffKey_(range, value) {
+  var v = value === undefined ? '' : String(value);
+  var digest = Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, v, Utilities.Charset.UTF_8));
+  return 'EDK_' + range.getSheet().getSheetId() + '_' + range.getA1Notation() + '_' + digest;
+}
+
+/** Simple onEdit (runs as the editor): remember who made this edit for the installable trigger. */
+function rememberEditor_(e) {
+  try {
+    var key = Session.getTemporaryActiveUserKey();
+    if (key) CacheService.getScriptCache().put(editHandoffKey_(e.range, e.value), key, 120);
+  } catch (err) { /* not available */ }
+}
+
+/** Installable onEdit (runs as the owner): wait up to ~3 s for the simple trigger's hand-off. */
+function waitForEditorKey_(e) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var k = editHandoffKey_(e.range, e.value);
+    for (var i = 0; i < 12; i++) {
+      var v = cache.get(k);
+      if (v) return v;
+      Utilities.sleep(250);
+    }
+  } catch (err) { /* ignore */ }
+  return '';
+}
+
 /**
- * Called from authorised contexts (sidebar, menu). Remembers the user's temporary key so later
- * simple-trigger edits by the same user can be attributed even on consumer (gmail.com) accounts.
+ * Called from authorised contexts (sidebar, every admin menu action). In these contexts the user has
+ * authorised the script themselves, so Google returns their email even for personal accounts.
+ * Stores temporaryKey -> email so later sheet edits by the same person can be attributed.
+ * Google rotates the temporary key every 30 days; any menu use re-registers it.
  */
 function registerCurrentUser_() {
   var email = '';
@@ -509,25 +569,31 @@ function registerCurrentUser_() {
   return { email: email, name: c ? c.name : '', label: (c && c.name) || email || 'Unidentified user' };
 }
 
+/** Admin Emails setting plus the spreadsheet owner (used for sheet protection and the Admin menu). */
 function getAdminEmails_() {
   var list = getSettings_().adminEmails.slice();
   try {
     var owner = ss_().getOwner();
-    if (owner && owner.getEmail() && list.indexOf(owner.getEmail().toLowerCase()) < 0) list.push(owner.getEmail().toLowerCase());
+    if (owner && owner.getEmail() && !list.some(function (a) { return sameEmail_(a, owner.getEmail()); })) list.push(owner.getEmail().toLowerCase());
   } catch (e) { /* shared drive files have no owner */ }
   return list;
 }
 
 function isAdmin_(email) {
   if (!email) return false;
-  return getAdminEmails_().indexOf(email.toLowerCase()) >= 0;
+  return getAdminEmails_().some(function (a) { return sameEmail_(a, email); });
+}
+
+/** Listed in Lists & Settings > Admin Emails (the web app's admin rule: the list only). */
+function isListedAdmin_(email) {
+  return !!email && getSettings_().adminEmails.some(function (a) { return sameEmail_(a, email); });
 }
 
 /** Throws (and alerts) if the current user is not a CRM administrator. */
 function requireAdmin_() {
   var email = '';
   try { email = Session.getActiveUser().getEmail(); } catch (e) { /* ignore */ }
-  if (isAdmin_(email)) return email;
+  if (isAdmin_(email)) { registerCurrentUser_(); return email; }
   var msg = 'This action is restricted to CRM administrators (Lists & Settings > "' + SET.ADMINS + '").' +
     (email ? '' : ' Your email address is not visible to the script.');
   notify_(msg);   // non-blocking: ui.alert would pause the script until someone clicks OK
@@ -624,8 +690,81 @@ function trackedKeyForCol_(col) {
 /* Edit trigger mode                                                   */
 /* ================================================================== */
 
+/**
+ * 'installable' (default): system writes are done by the installable onEdit trigger running as the
+ * owner, so locked columns can use STRICT protection. 'simple': legacy mode for setups without the
+ * installable trigger; protections fall back to warning-only.
+ */
 function getEditMode_() {
   try {
-    return PropertiesService.getDocumentProperties().getProperty(PROP.EDIT_MODE) || 'simple';
-  } catch (e) { return 'simple'; }
+    return PropertiesService.getDocumentProperties().getProperty(PROP.EDIT_MODE) || 'installable';
+  } catch (e) { return 'installable'; }
+}
+
+function strictMode_() { return getEditMode_() === 'installable'; }
+
+/* ================================================================== */
+/* Locked (read-only for counsellors) columns                          */
+/* ================================================================== */
+
+/** Column numbers counsellors may not edit: system + formula columns + Lists & Settings > Counsellor-Locked Fields. */
+function lockedCols_() {
+  return memo_('lockedCols', function () {
+    var cols = LEAD_SYSTEM_COLS.concat(LEAD_FORMULA_COLS);
+    var names = [];
+    var sh = ss_().getSheetByName(SHEET.SETTINGS);
+    if (sh && sh.getMaxColumns() >= LS.LOCKED && str_(sh.getRange(1, LS.LOCKED).getValue())) {
+      var last = Math.max(sh.getLastRow(), 2);
+      names = sh.getRange(2, LS.LOCKED, last - 1, 1).getValues().map(function (r) { return str_(r[0]); }).filter(String);
+    } else {
+      names = DEFAULT_LOCKED_FIELDS.slice();
+    }
+    var customNames = {};
+    try { readCustomFields_().forEach(function (f) { customNames[customCol_(f.slot)] = f.name; }); } catch (e) { /* settings not built yet */ }
+    names.forEach(function (n) {
+      for (var c = 1; c <= LEAD_COLS; c++) {
+        if (same_(LEAD_HEADERS[c - 1], n) || (customNames[c] && same_(customNames[c], n))) cols.push(c);
+      }
+    });
+    return cols.filter(function (c, i) { return cols.indexOf(c) === i; }).sort(function (a, b) { return a - b; });
+  });
+}
+
+function isLockedCol_(col) { return lockedCols_().indexOf(col) >= 0; }
+
+/** Groups sorted column numbers into [[first, last], ...] runs of adjacent columns. */
+function colRuns_(cols) {
+  var sorted = cols.slice().sort(function (a, b) { return a - b; });
+  var runs = [];
+  sorted.forEach(function (c) {
+    var last = runs[runs.length - 1];
+    if (last && c === last[1] + 1) last[1] = c; else runs.push([c, c]);
+  });
+  return runs;
+}
+
+/** Writes the given columns of a lead row back to the sheet, one setValues per run of adjacent columns. */
+function writeRowCols_(sheet, rowNum, row, cols) {
+  colRuns_(cols.filter(function (c) { return LEAD_FORMULA_COLS.indexOf(c) < 0; })).forEach(function (run) {
+    sheet.getRange(rowNum, run[0], 1, run[1] - run[0] + 1).setValues([row.slice(run[0] - 1, run[1])]);
+  });
+}
+
+/* ================================================================== */
+/* Cached stage -> substage map (used by the fast onEdit path)          */
+/* ================================================================== */
+
+/** {lowerStage: {name, subs:[...]}} of ACTIVE stages; cached for 6 h, cleared when Stage Master changes. */
+function cachedSubstageMap_() {
+  var cache = CacheService.getDocumentCache();
+  var raw = cache.get(PROP.SUBSTAGE_MAP);
+  if (raw) { try { return JSON.parse(raw); } catch (e) { /* rebuild */ } }
+  var map = {};
+  getStageInfo_().activeStages.forEach(function (s) { map[s.name.toLowerCase()] = { name: s.name, subs: s.subs }; });
+  try { cache.put(PROP.SUBSTAGE_MAP, JSON.stringify(map), 21600); } catch (e) { /* too large: uncached */ }
+  return map;
+}
+
+function clearSubstageMapCache_() {
+  try { CacheService.getDocumentCache().remove(PROP.SUBSTAGE_MAP); } catch (e) { /* ignore */ }
 }

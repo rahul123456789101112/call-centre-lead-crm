@@ -137,7 +137,23 @@
     show('formMsg', 'err', 'Error: ' + esc(err && err.message ? err.message : err) + '<br>Your entry was not lost - press Save again.');
   }
 
+  /** Counsellors (strict protection): show the counsellor web app, which saves as the CRM owner. */
+  function renderWebApp(c) {
+    document.body.innerHTML = '';
+    if (!c.webAppUrl) {
+      document.body.innerHTML = '<h2>Log Follow-Up</h2><div class="msg err">The counsellor web app has not been deployed yet. ' +
+        'Ask a CRM administrator to deploy it (docs/SETUP.md, "Counsellor web app").</div>';
+      return;
+    }
+    // Sign-in needs a full browser tab (Google's permission screen cannot run inside a sidebar).
+    document.body.innerHTML = '<h2>Log Follow-Up</h2><p>Counsellors log follow-ups in the counsellor web app.</p>' +
+      '<p><a class="btn" href="' + esc(c.webAppUrl) + '" target="_blank" rel="noopener" ' +
+      'style="display:inline-block;background:#1F3864;color:#fff;padding:9px 14px;border-radius:4px;text-decoration:none;font-weight:600">' +
+      'Open the counsellor web app</a></p><p class="hint">It opens in a new tab and signs you in with your Google account.</p>';
+  }
+
   function init(c) {
+    if (c.useWebApp) { renderWebApp(c); return; }
     ctx = c;
     var who = $('who');
     if (c.actor.name) {

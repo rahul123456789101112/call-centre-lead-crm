@@ -7,7 +7,8 @@ This builds the complete Call Centre Lead CRM inside a **blank Google Sheet** us
 ## 1. Install (about 10 minutes, done once by the administrator)
 
 1. Create a new, blank Google Sheet (sheets.new), for example "Lead CRM".
-   Use the Google account that will **own** the CRM, ideally a shared team account and not a caller's personal account.
+   Use the Google account that will **own** the CRM. A personal Gmail account is fine; ideally use a dedicated account for the CRM rather than a counsellor's own.
+   **The owner must run setup and deploy the web app.** The installable triggers and the web app run as that account, which is what lets them write to columns counsellors cannot edit.
 2. Set the sheet's time zone: **File → Settings → General → Time zone** (for example, *(GMT+05:30) India Standard Time*).
    All dates, "today", overdue checks and timestamps use this time zone.
 3. Open **Extensions → Apps Script**. Rename the project to "Lead CRM".
@@ -21,7 +22,11 @@ This builds the complete Call Centre Lead CRM inside a **blank Google Sheet** us
    | `FollowUp.gs` | Script → `FollowUp` |
    | `Menu.gs` | Script → `Menu` |
    | `CustomFields.gs` | Script → `CustomFields` |
+   | `DataQuality.gs` | Script → `DataQuality` |
+   | `Dashboard.gs` | Script → `Dashboard` |
+   | `Web.gs` | Script → `Web` |
    | `FollowUpSidebar.html` | HTML → `FollowUpSidebar` (the name must match exactly) |
+   | `Portal.html` | HTML → `Portal` (the name must match exactly) |
 
    Delete the default `Code.gs` (or replace its contents with one of the files).
 5. **Manifest (recommended):** go to **Project Settings (⚙) → tick "Show 'appsscript.json' manifest file in editor"**. Open `appsscript.json` and replace its contents with [`apps-script/appsscript.json`](../apps-script/appsscript.json).
@@ -71,14 +76,48 @@ The first time you run setup, Google shows **"Authorization required"**:
 2. You may see **"Google hasn't verified this app"**. This is normal for a private script you wrote yourself. Click **Advanced → Go to Lead CRM (unsafe)**.
 3. Click **Allow**.
 
-### Callers
+### Counsellor web app (recommended for confidentiality)
 
-Share the spreadsheet with each caller as **Editor**. Each caller should then, once:
+Counsellors work in a web app instead of the spreadsheet; [CONFIDENTIALITY.md](CONFIDENTIALITY.md) explains why. It has **two parts**:
+- the **main web app** (this project), which runs as the owner;
+- a tiny **sign-in app** (separate project, folder [`identity-app/`](../identity-app)), which runs as the visitor and tells the main app who they are.
 
-1. Open the sheet and choose **Lead CRM → Log Follow-Up…**.
-2. Complete the same authorisation screens.
+Counsellors can use **any email that has a Google account** (Gmail, company email or any other provider). Do everything below as the **owner**.
 
-That one step also registers who they are, so later edits they make in the sheet show their name (see §5).
+**A. Deploy the main web app**
+1. In this project's Apps Script editor: **Deploy → New deployment → ⚙ Select type → Web app**. Description `Counsellor portal`.
+2. **Execute as: Me**.
+3. **Who has access: Anyone with a Google account**. Not "Anyone", which would allow anonymous visitors.
+   The included `appsscript.json` pre-sets both values (`executeAs: USER_DEPLOYING`, `access: ANYONE`).
+4. Deploy, authorise, and note the **Web app URL** (ends with `/exec`).
+
+**B. Create the sign-in app**
+5. Go to script.google.com → **New project**. Name it `Lead CRM sign-in`. It is a standalone project, not bound to the sheet.
+6. Replace `Code.gs` with [`identity-app/Identity.gs`](../identity-app/Identity.gs).
+7. Turn on "Show appsscript.json" in Project Settings and paste [`identity-app/appsscript.json`](../identity-app/appsscript.json). It requests **only** "see your email address" and sets *Execute as: User accessing the web app* and *Who has access: Anyone with a Google account*.
+
+**C. Connect them**
+8. In the spreadsheet: **Lead CRM → Admin → Web app sign-in setup**. It shows a generated **IDENTITY_SECRET** and the main app's URL.
+9. In the sign-in project: **Project Settings → Script properties → Add**:
+   - `IDENTITY_SECRET` = the secret shown;
+   - `MAIN_APP_URL` = the main web app URL.
+10. Sign-in project: **Deploy → New deployment → Web app**. Check that it says *Execute as: User accessing the web app* and *Who has access: Anyone with a Google account*. Deploy and copy its `/exec` URL.
+11. Back in the dialog from step 8, paste the sign-in app's URL and click OK.
+
+**D. Go live**
+12. **Lead CRM → Open counsellor web app** now shows the **counsellor link**, which is the sign-in app's URL. Send it to counsellors.
+    - The first time, Google asks each counsellor to allow "See your primary Google Account email address".
+    - Each counsellor must be an **Active** row in Counsellor Master with the email of the Google account they sign in with. Admins in *Admin Emails* can use the link too.
+13. **Stop sharing the spreadsheet with counsellors** (Share → remove them). Keep admins only.
+
+**After every code change:** Deploy → Manage deployments → ✏ → Version: **New version** → Deploy, for the main web app (and the sign-in app if `Identity.gs` changed). The URLs stay the same.
+
+### Counsellors still using the spreadsheet (transition)
+
+If counsellors keep editor access for a while:
+- they can edit only unlocked (non-grey) columns;
+- **Lead CRM → Log Follow-Up** shows them a button that opens the counsellor web app in a new tab;
+- each must use the Lead CRM menu once (for example **Identify me**) so their sheet edits can be attributed (§5).
 
 ## 3. Permissions the script uses
 
@@ -86,13 +125,17 @@ That one step also registers who they are, so later edits they make in the sheet
 |---|---|
 | `spreadsheets.currentonly` | Read/write **this** spreadsheet only (no access to your other files) |
 | `script.container.ui` | Menu, sidebar, dialogs |
-| `script.scriptapp` | Create the installable triggers (onChange, optional installable onEdit, optional reminders) |
+| `script.scriptapp` | Create the installable triggers (onEdit, onChange, onOpen, hourly maintenance, optional reminders) |
 | `script.send_mail` | Optional daily reminder emails, which stay **off** until an admin enables them |
 | `userinfo.email` | Identify the person making a change (Last Updated By, audit trail) |
 
+The **sign-in app** (separate project) requests only `userinfo.email` ("See your primary Google Account email address"). That is all counsellors are asked to allow.
+
 The script stores no passwords or credentials. The only person-related data it adds is:
-- account emails in the log's "Updated By" column, and
-- an internal key→email mapping (Script Properties) used to identify editors.
+- account emails in the Follow-Up Log's "Updated By" column and in the Access Log, and
+- an internal key→email mapping (Script Properties), used only in legacy simple mode.
+
+The main web app needs no extra scopes; it runs with the owner's authorisation.
 
 ## 4. First configuration (admin)
 
@@ -102,26 +145,39 @@ The script stores no passwords or credentials. The only person-related data it a
    - check the priority, outcome, source, status and activity-type lists;
    - under *Setting / Value*, put every administrator's email in **Admin Emails** (comma separated);
    - set **Lead ID Prefix** before you add real leads.
+   - review **Counsellor-Locked Fields** (column AD). The default list is Lead ID, Mobile Number, Email ID, Assigned Counsellor, Lead Created Date and Lead Source; all system and formula columns are always locked.
 4. Run **Lead CRM → Admin → Reapply protections** so the admin list takes effect.
-5. Run **Lead CRM → Admin → Run health check** and resolve anything marked `CHECK`.
-6. Delete any test leads and log rows. Optionally reset the counters (see [ADMIN.md](ADMIN.md#resetting-ids-before-go-live)).
+5. Deploy the counsellor web app (§2) and stop sharing the spreadsheet with counsellors.
+6. Run **Lead CRM → Admin → Run health check** and resolve anything marked `CHECK`.
+7. Delete any test leads and log rows. Optionally reset the counters (see [ADMIN.md](ADMIN.md#resetting-ids-before-go-live)).
 
-## 5. How users are identified (important)
+## 5. How users are identified (personal Google accounts, any email provider)
 
-Google only shares an editor's email with a script in some situations. The CRM uses the most reliable method available and falls back in this order:
+The owner is a personal Google account, and editors and counsellors may use any Google account. In this setup **Google does not give a script the email of a person it is not running as**:
+- `Session.getActiveUser()` and the edit event's `e.user` come back **empty** for everyone except the owner, both in the owner's installable triggers and in the owner-run web app;
+- the email *is* available whenever code runs **as that person**, after they have authorised it.
 
-| Order | Source | When it works |
+The CRM uses only those reliable cases:
+
+| Where | Code runs as | How the user is identified |
 |---|---|---|
-| 1 | `Session.getActiveUser()` / `e.user` | Same Google Workspace domain as the script owner; any user inside the follow-up sidebar (they authorised it) |
-| 2 | Temporary user key → email mapping | Consumer (gmail.com) accounts and cross-domain editors. The mapping is recorded when the user opens **Log Follow-Up** or **Identify me**. Google rotates the key every 30 days, and the sidebar refreshes it automatically. |
-| 3 | Manual selection | The sidebar always asks which counsellor performed the activity; it defaults to the mapped counsellor. |
-| 4 | `Unidentified user` | Shown in Last Updated By when nothing above is available. The change is still timestamped and audited. |
+| **Counsellor web app** | Owner (main app) + **visitor (sign-in app)** | The sign-in app runs as the visitor and reads their Google-verified email. It passes the email to the main app in a signed, 5-minute, single-use token; the main app keeps a 6-hour session. Fully reliable for any Google account. See CONFIDENTIALITY.md. |
+| **Lead CRM menu, admin sidebar** | The user themself (they authorised the script) | `Session.getActiveUser().getEmail()`. Reliable. At the same time the script records their Google **temporary user key** → email in Script Properties ("registration"). |
+| **Edits in the spreadsheet** | The simple `onEdit` runs **as the editor**; the installable `onEditInstallable` runs **as the owner** | The simple trigger caches the editor's temporary user key for that exact edit (`EDK_…`, 2 minutes). The installable trigger picks it up (waits up to 3 s) and looks up the registered email. |
+| **Spreadsheet opened** | Simple `onOpen` (as the opener) + installable `onOpenInstallable` (as the owner) | Same hand-off: the opener's key is cached, then resolved to their registered email |
 
-Email → counsellor name comes from **Counsellor Master → Email ID**, which is the administrator-controlled mapping.
+**Registration** happens automatically whenever someone uses the Lead CRM menu: Identify me, Log Follow-Up, Refresh Dashboard, Views, or any Admin item.
+- Google **rotates the temporary key every 30 days**. The next menu use re-registers it.
+- An editor who has **never** used the menu, or not since the key rotated, shows as **"Unidentified user"**. Their edit is still saved, timestamped and audited.
+- Ask every admin who edits the sheet to run **Lead CRM → Identify me** once. The health check shows how many identities are registered.
+
+**Why not just `Session.getActiveUser()` in the trigger?** For personal accounts it is blank in the owner's trigger. The temporary key is Google's documented way to recognise a returning user without revealing their email. Mapping it to an email the user disclosed in an authorised context is the most reliable method available inside a spreadsheet. The web app needs no such workaround, because the sign-in app asks Google directly.
+
+Emails are mapped to names through **Counsellor Master → Email ID**, case-insensitively, ignoring Gmail dots and `+tags`. *Last Updated By* shows the counsellor name, or the email for admins without a counsellor row.
 
 **Edit-trigger modes** (Lead CRM → Admin):
-- **Simple (default):** `onEdit` runs as the person editing. Identity works as described above. Nobody else needs to install anything.
-- **Installable:** `onEditInstallable` runs as the admin who enabled it. Use this only when all users are in one Google Workspace domain, where `e.user` is populated. Otherwise every edit is attributed to "Unidentified user".
+- **Installable + strict locking (default):** described above. Locked columns use **strict** protection: Google rejects a counsellor's edit with its standard "You are trying to edit a protected cell or object" message, and only the owner/admins and the script can change them.
+- **Legacy simple mode:** for setups without the installable trigger. `onEdit` runs as the editor, so locked columns fall back to **warning-only** protection. Not recommended.
 
 ## 6. What setup builds
 
@@ -129,12 +185,13 @@ Email → counsellor name comes from **Counsellor Master → Email ID**, which i
 
 | Sheet | Purpose | Who edits |
 |---|---|---|
-| Lead Management | Working sheet, one row per lead (10,000 rows pre-formatted) | Callers |
-| Follow-Up Log | Append-only history of every activity and audited change | Script only (warning protection) |
+| Lead Management | Working sheet, one row per lead (10,000 rows pre-formatted) | Admins (counsellors use the web app; during transition they can edit unlocked columns only) |
+| Follow-Up Log | Append-only history of every activity and audited change | Script only (strict protection; the script writes as the owner) |
 | Stage Master | Stages / substages / order / active flag | Admins |
 | Counsellor Master | Counsellors, emails, teams, active flag | Admins |
 | Dashboard | KPIs, reports A–G, 6 charts | Formulas (filter cells editable by all) |
-| Lists & Settings | Dropdown lists, ageing buckets, settings, custom-field table, auto helper lists | Admins |
+| Lists & Settings | Dropdown lists, ageing buckets, settings, custom-field table, Counsellor-Locked Fields, auto helper lists | Admins |
+| Access Log | Who opened the web app or spreadsheet, viewed or changed which lead, and when | Script only (admins can read) |
 
 ### Lead Management columns
 
@@ -173,7 +230,10 @@ Column positions are fixed. Custom fields are switched on and off by **showing a
 
 > **Upgrading a sheet built with the original layout** (custom fields in Q–Z): run **Set up / repair workbook** once. It moves Q–Z to E–N with `moveColumns`, keeping all data. Any custom field that holds data or was renamed becomes an active field with that name; the rest are hidden.
 
-**Header colours:** navy = caller fields, grey = system, green = formula, purple = custom fields.
+**Header colours:**
+- **light grey header with grey cells** = locked: counsellors cannot edit it. This covers system/formula columns plus *Counsellor-Locked Fields*.
+- navy = editable field;
+- purple = editable custom field.
 
 **Row colours:**
 
@@ -211,7 +271,11 @@ The category is stored on each row when it is written, so later changes to the a
 
 - **Stage (P):** data validation "list from a range" pointing at `'Lists & Settings'!R2:R`. That range is an auto-formula: active stages from Stage Master, unique, sorted by Stage Order. It updates by itself when Stage Master changes; no script is needed.
 - **Substage (Q):** the script sets a **per-row** validation rule ("list of items") containing only the active substages of that row's stage:
-  - **When the stage changes** (typing, paste, or the form): that row's rule is rebuilt immediately. If the existing substage no longer belongs to the new stage, it is **cleared**. A `Substage Cleared` System entry records the old value, and the user sees a message.
+  - **When the stage changes in the sheet,** the *first and only* thing the simple `onEdit` trigger does is clear that row's substage and set the new stage's dropdown.
+    - It uses the stage list cached in CacheService and the edit event's values.
+    - A single-cell change costs two writes and no sheet reads, so the new list is ready before the user reaches the Substage cell.
+    - The installable trigger then writes the audit trail separately: `Stage Updated`, and `Substage Cleared` with the old value.
+  - In the web app and sidebar, changing the stage clears the substage list in the form immediately; the server applies the same rule.
   - **When Stage Master is edited:** all rows' rules are rebuilt in one batch call (a few seconds for 10,000 rows).
   - **After sorting / inserting / deleting rows:** the installable onChange trigger rebuilds them (throttled to once per 30 seconds). **Lead CRM → Refresh substage dropdowns** does the same on demand.
   - **Empty rows have no substage rule at all.** Setup does not create 10,000 per-row rules. A row gets its dropdown when a stage is first chosen in it (by typing, pasting, defaulting for a new lead, or through the follow-up form).
@@ -228,7 +292,12 @@ The yellow cells are the controls:
 - **Custom From / To**: used only with Custom Date Range.
 - **Counsellor**: *All Counsellors* or one person, including inactive counsellors so history stays reportable.
 
-"Applied From/To" shows the dates actually used. **Last Refreshed** is written whenever a filter changes or **Lead CRM → Refresh Dashboard** runs. All numbers are live formulas.
+"Applied From/To" shows the dates actually used. **The numbers are calculated by the script, not by live formulas**, and written as values. They refresh:
+- when a yellow filter cell changes (installable edit trigger);
+- every hour (maintenance trigger);
+- on **Lead CRM → Refresh Dashboard**.
+
+**Last Refreshed** shows when. See *Performance* below for why.
 
 ### KPI definitions
 
@@ -273,10 +342,30 @@ The **counsellor filter** applies to:
 - lead and follow-up ageing
 - leads by substage
 
-## 9. Optional: daily email reminders
+## 9. Performance: what was slow and what changed
+
+| Cause | Cost before | Now | Trade-off |
+|---|---|---|---|
+| **Data Quality Flags** `ARRAYFORMULA` over 10,000 rows (REGEXMATCH + several COUNTIFS against Stage Master per row) | Recalculated in full after **every** edit to mobile, email, owner, stage, substage, dates or status: millions of operations per keystroke | Script-computed values. Rows you edit are updated by the trigger; all rows hourly; also **Admin → Recalculate data-quality flags** | "Overdue follow-up" flags can be up to 1 hour late after midnight. Changes made outside the triggers (another script/API) show after the next hourly run. |
+| **Dashboard**: ~1,000 COUNTIFS/FILTER/COUNTUNIQUE formulas over full Lead Management and Follow-Up Log columns | Every lead edit recalculated hundreds of them, even when nobody had the dashboard open | Calculated by the script in one pass and written as values | Not live: up to 1 hour old unless a filter is changed or *Refresh Dashboard* is used. **Last Refreshed** shows the age. |
+| Duplicate-ID colour rule `COUNTIF($A$2:$A,$A2)` and the duplicate mobile/email COUNTIF rules | Evaluated for every visible cell on every repaint | Removed. IDs are unique by construction (script + validation); duplicates are found once by the script and coloured from the flag | Duplicate colouring updates with the flags, not instantly for edits made by other scripts |
+| **onEdit work**: one handler did locking, sheet reads, logging and the substage change in sequence, so the substage changed seconds after the stage | The user often reached the Substage cell first, still seeing the old list (the reported bug) | Split: the simple trigger does only the substage fast path; the installable trigger does the rest; master data is cached; flags/log are written last | Two triggers per edit (both cheap). If the cache is stale for a few seconds after a Stage Master change, the onChange refresh and the installable trigger correct it. |
+| Follow-Up Count (V) and Total Activities (AG) | Still `ARRAYFORMULA(VLOOKUP(QUERY(log)))` | Kept: they depend only on Follow-Up Log, which changes once per save, and they stay correct after sorting or manual log fixes | ~1 s background recalculation after each follow-up on very large logs |
+
+Setup writes 14 formulas in total, instead of about 2,150 in the previous version.
+
+## 10. Optional: daily email reminders
 
 These are off by default. An admin can choose **Lead CRM → Admin → Enable daily email reminders**. Each active counsellor with an email then gets one daily list of their open leads that are due today or overdue, at the hour set in *Reminder Hour*. **Disable daily email reminders** removes the trigger.
 
-## 10. Updating the code later
+## 11. Updating the code later
 
-Paste the new file contents into the same Apps Script files. Then run **Lead CRM → Admin → Set up / repair workbook**, again if it says it is not finished. Your data is kept.
+Paste the new file contents into the same Apps Script files. Then:
+1. Run **Lead CRM → Admin → Set up / repair workbook**, again if it says it is not finished. Your data is kept.
+2. Update the web app deployment to a **New version** (§2).
+
+Repair converts an older workbook in place:
+- the Data Quality Flags formula is replaced by script values;
+- the dashboard formulas are replaced by script values;
+- the installable triggers are created;
+- locked columns switch to strict protection.

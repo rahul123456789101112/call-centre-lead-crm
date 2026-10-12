@@ -25,6 +25,12 @@ function getSelectedLeadId() {
 /** Everything the sidebar needs to render. Also registers the caller's identity mapping. */
 function getFollowUpContext() {
   var actor = registerCurrentUser_();
+  var webAppUrl = getWebAppUrl_() && getIdentityUrl_();
+  if (strictMode_() && !isAdmin_(actor.email)) {
+    // Counsellors: the sidebar links to the web app (via its sign-in app); it runs as the owner and can write locked columns.
+    var lead = getSelectedLeadId();
+    return { useWebApp: true, webAppUrl: webAppUrl ? signInUrl_(lead) : '', actor: actor };
+  }
   var settings = getSettings_();
   var lists = getLists_();
   var stageInfo = getStageInfo_();
@@ -130,8 +136,23 @@ function recentActivities_(leadId, limit) {
  * Returns {ok, activityId, lead} or {ok:false, errors:[...], duplicate?}.
  */
 function submitFollowUp(p) {
-  p = p || {};
   var actor = registerCurrentUser_();
+  // Under strict protection a counsellor's own session cannot write locked/system columns. Counsellors
+  // log follow-ups through the web app (which runs as the owner); the sidebar embeds it for them.
+  if (strictMode_() && !isAdmin_(actor.email)) {
+    return { ok: false, errors: ['Counsellors log follow-ups in the counsellor web app (Lead CRM > Log Follow-Up opens it). Ask an admin to deploy it if it does not open.'] };
+  }
+  return submitFollowUpAs_(p, actor, { source: 'Sheet sidebar' });
+}
+
+/**
+ * Records one follow-up as the given actor. Used by the sheet sidebar (admins) and the web app
+ * (runs as the owner; actor = the signed-in counsellor). opts: {source, forceCounsellor, ownerOnly}
+ */
+function submitFollowUpAs_(p, actor, opts) {
+  p = p || {};
+  opts = opts || {};
+  if (opts.forceCounsellor) p.counsellor = opts.forceCounsellor;
   var settings = getSettings_();
   var lists = getLists_();
   var stageInfo = getStageInfo_();
@@ -195,6 +216,9 @@ function submitFollowUp(p) {
     var rowNum = findLeadRow_(sheet, leadId);           // re-located inside the lock: rows may have been sorted
     if (!rowNum) return { ok: false, errors: ['Lead ' + leadId + ' was not found (was it deleted?).'] };
     var row = sheet.getRange(rowNum, 1, 1, LEAD_COLS).getValues()[0];
+    if (opts.ownerOnly && !same_(row[LC.OWNER - 1], opts.ownerOnly)) {
+      return { ok: false, errors: ['Lead ' + leadId + ' is not assigned to you.'] };
+    }
     var before = parseSnapshot_(row[LC.SNAPSHOT - 1]) || readTracked_(row);
 
     // ---- stage / substage / status / priority changes made in the form ----
@@ -239,20 +263,21 @@ function submitFollowUp(p) {
     var res = trackLeadChanges_(row, before, {
       actor: { email: actor.email, name: actor.name, label: actor.name || counsellor },
       now: now, stageInfo: stageInfo, settings: settings, statusExplicit: statusExplicit,
-      logNextFu: false, note: 'Via follow-up form'
+      logNextFu: false, note: 'Via ' + (opts.source || 'follow-up form')
     });
+    row[LC.DQ_FLAGS - 1] = computeDqFlags_(row, buildDqEnv_(sheet));
 
     var main = buildLogEntry_({
       row: row, time: activityTime, type: typeDef.type, category: typeDef.category, counsellor: counsellor,
       updatedBy: actor.email || ('Unidentified (selected ' + counsellor + ')'), outcome: outcome,
       nextFu: nextKey ? dateFromKey_(nextKey) : '', remarks: remarks, submissionId: subId
     });
-    var ids = appendLogRows_([main].concat(res.entries));
 
     writeLeadRowCells_(sheet, rowNum, row);
     if (stageChanged || subChanged || res.stageChanged) {
       sheet.getRange(rowNum, LC.SUBSTAGE).setDataValidation(substageRuleFor_(row[LC.STAGE - 1], stageInfo, {}));
     }
+    var ids = appendLogRows_([main].concat(res.entries));
     SpreadsheetApp.flush();
     if (subId) cache.put('SUB_' + subId, ids[0], 21600);
     cache.put(fingerprint, ids[0], 120);
@@ -275,7 +300,8 @@ function writeLeadRowCells_(sheet, rowNum, row) {
   // Only the columns the form owns are rewritten (never names, contacts, custom fields or formula
   // columns), grouped into runs of adjacent columns: one setValues call per run.
   var owned = [LC.STAGE, LC.SUBSTAGE, LC.PRIORITY, LC.LAST_CONTACT, LC.NEXT_FU, LC.OUTCOME, LC.UPDATED_BY,
-    LC.LAST_ACTIVITY, LC.REMARKS, LC.STATUS, LC.LAST_FU_DATE, LC.STAGE_CHANGED, LC.ASSIGNED_DATE, LC.PREV_OWNER, LC.SNAPSHOT]
+    LC.LAST_ACTIVITY, LC.REMARKS, LC.STATUS, LC.LAST_FU_DATE, LC.STAGE_CHANGED, LC.ASSIGNED_DATE, LC.PREV_OWNER,
+    LC.DQ_FLAGS, LC.SNAPSHOT]
     .filter(function (c) { return LEAD_FORMULA_COLS.indexOf(c) < 0; })
     .sort(function (a, b) { return a - b; });
   var start = owned[0];

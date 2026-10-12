@@ -71,11 +71,32 @@ Start with **Lead CRM → Admin → Run health check**. It reports most configur
 | Symptom | Cause | Fix |
 |---|---|---|
 | Rows disappeared | A **Views** menu item set the shared filter | **Lead CRM → Views → Clear view filters**. For personal views use Data → Filter views. |
-| Warning dialog on every sort | Warning-only protection on system columns | Click OK; this is intended |
+| Warning dialog on every sort (legacy simple mode) | Warning-only protection on system columns | Click OK; this is intended |
 | Callers can edit master sheets | Protections not applied with the correct admin list | **Admin → Reapply protections** |
 | Admin cannot edit a master sheet | Admin email missing from the setting | Owner adds it and reapplies protections |
 | Reminder emails not arriving | Not enabled, counsellor inactive or without email, or daily mail quota exhausted | Health check; **Admin → Send reminders now (test)**; consumer accounts have about a 100/day quota |
 | Duplicate triggers | Code pasted into a copy that already had triggers | Apps Script → Triggers (clock icon) → delete duplicates, then run *Set up / repair workbook* |
+
+## Strict locking, triggers and the counsellor web app
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Substage still shows the previous stage's list after changing the stage | Fast-path cache stale (Stage Master changed by import/another script), or the simple `onEdit` failed | **Lead CRM → Refresh substage dropdowns**; check Apps Script → Executions for `onEdit` errors |
+| Counsellor edits a grey column: "You are trying to edit a protected cell or object" | Intended: the column is locked (system/formula or *Counsellor-Locked Fields*) | Admin removes the field from *Counsellor-Locked Fields* if counsellors should edit it |
+| W/X/AA/Lead ID are not filled after an edit | The installable onEdit trigger is missing, or was created by an account that lost access | As the owner: **Admin → Use installable edit trigger + strict locking** (or re-run setup); check Apps Script → Triggers |
+| Edits show "Unidentified user" | The editor has not used the Lead CRM menu yet, or not since Google rotated their temporary key (every 30 days) | The editor runs **Lead CRM → Identify me** once. The health check shows how many identities are registered |
+| Counsellor cannot sort or change the filter | Strict protection on locked columns | Use **Data → Create filter view** (personal), or better, the web app |
+| Web app: "Access denied" for a counsellor | The Google account they signed in with is not an **Active** row in Counsellor Master (or not in Admin Emails). The page names the email it saw | Add exactly that email, or have them sign out of Google and sign in with the listed account (try a private window) |
+| Web app: "Please sign in" / "Sign-in link expired" | They opened the main app URL directly, or reused an old link | Use the **counsellor link** (sign-in app URL), not the main app URL |
+| Sign-in app: "Sign-in is not configured" | `IDENTITY_SECRET` / `MAIN_APP_URL` missing in the sign-in project's Script properties | Repeat SETUP.md §2 step C |
+| Sign-in works but the main app says the link is invalid | The secrets in the two projects differ | Copy `IDENTITY_SECRET` again from **Admin → Web app sign-in setup** |
+| "Your session has expired" | 6 hours without activity, or Google evicted the cache | Click *Sign in again* |
+| Web app shows old behaviour after a code update | The deployment still points to the old version | Deploy → Manage deployments → ✏ → **New version** |
+| Sidebar shows "web app has not been deployed" | Main web app or sign-in app not set up | SETUP.md §2; **Admin → Web app sign-in setup** |
+| "Lead … is not assigned to you" in the web app | The lead was reassigned | Refresh the list; ask an admin |
+| Dashboard numbers look old | It is computed, not live | Change a filter, or **Lead CRM → Refresh Dashboard**; check *Last Refreshed* and the hourly `scheduledMaintenance` trigger |
+| Data Quality Flags out of date | Changed by import/another script; or date-based flags waiting for the hourly run | **Admin → Recalculate data-quality flags** |
+| Access Log empty | Sheet missing (old version) or the web app not used yet | Run *Set up / repair workbook* |
 
 ## Where to see errors
 

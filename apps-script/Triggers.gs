@@ -1,32 +1,124 @@
 /**
  * Triggers.gs
  * Edit handling: Lead IDs, fixed timestamps, dependent stage/substage dropdowns,
- * stage-change validation, duplicate checks and the audit trail.
+ * stage-change validation, duplicate checks, data-quality flags and the audit trail.
  *
- * Two modes (see docs/SETUP.md):
- *  - "simple" (default): the simple onEdit(e) trigger runs as the person editing. Their
- *    identity is resolved via Session / the temporary-key mapping in Config.gs.
- *  - "installable": an installable onEdit trigger (created by an admin) runs as that admin.
- *    Recommended only for a single Google Workspace domain, where e.user is populated.
- * Only one of the two handlers does work at a time.
+ * Identity (personal Google accounts): Google does not give the owner's installable trigger the
+ * editor's email. The simple trigger therefore caches the editor's temporary user key for each edit
+ * (rememberEditor_), and the installable trigger maps it to the email the person registered by using
+ * the Lead CRM menu at least once (see Config.gs > getActor_ and docs/SETUP.md section 5).
+ *
+ * Two triggers fire for every edit:
+ *  - onEdit(e) (simple, runs as the editor, starts fastest) does ONLY the stage-change fast path:
+ *    clear the row's substage and set its new dropdown. No logging, no lock, no other reads.
+ *  - onEditInstallable(e) (installable, created by setup, runs as the owner) does everything else:
+ *    IDs, timestamps, audit trail, data-quality flags. Because it runs as the owner it can write to
+ *    columns that are STRICTLY protected against counsellors.
+ * Legacy "simple" mode (Admin menu) lets onEdit do the full work instead, with warning-only protection.
  */
 
 /* ================================================================== */
 /* Entry points                                                        */
 /* ================================================================== */
 
-/** Simple trigger. Runs for every editor without authorisation. */
+/** Simple trigger: minimal stage-change path first, full handling only in legacy simple mode. */
 function onEdit(e) {
   if (!e || !e.range) return;
-  if (getEditMode_() === 'installable') return;
-  handleEdit_(e);
+  try {
+    fastStageChange_(e);
+  } catch (err) {
+    console.warn('fastStageChange_: ' + (err && err.message ? err.message : err));
+  }
+  rememberEditor_(e);   // identity hand-off for the installable trigger (personal Google accounts)
+  if (getEditMode_() === 'simple') handleEdit_(e);
 }
 
-/** Installable trigger handler (Admin > Use installable edit trigger). */
+/** Installable trigger (created by setup, runs as the owner). */
 function onEditInstallable(e) {
   if (!e || !e.range) return;
   if (getEditMode_() !== 'installable') return;
   handleEdit_(e);
+}
+
+/**
+ * The very first reaction to a Lead Stage change: clear Lead Substage and set the new stage's
+ * dropdown for the edited row(s). Uses the cached stage map and the event values, so a single-cell
+ * change costs two writes and no sheet reads. Audit logging happens later in the installable trigger.
+ */
+function fastStageChange_(e) {
+  var range = e.range;
+  if (range.getColumn() !== LC.STAGE || range.getLastColumn() !== LC.STAGE) return false;
+  var sheet = range.getSheet();
+  if (sheet.getName() !== SHEET.LEADS) return false;
+  var r1 = Math.max(range.getRow(), 2), r2 = range.getLastRow();
+  if (r2 < r1) return false;
+  var map = cachedSubstageMap_();
+  var ruleCache = {};
+  var ruleFor = function (stage) {
+    var key = str_(stage).toLowerCase();
+    if (!ruleCache[key]) {
+      var s = map[key];
+      ruleCache[key] = s && s.subs.length
+        ? SpreadsheetApp.newDataValidation().requireValueInList(s.subs, true).setAllowInvalid(false)
+          .setHelpText('Substages of "' + s.name + '" (from Stage Master).').build()
+        : noSubstageRule_(s ? s.name : str_(stage));
+    }
+    return ruleCache[key];
+  };
+
+  if (r1 === r2 && range.getNumRows() === 1) {
+    var newStage = e.value === undefined ? '' : e.value;
+    if (e.oldValue !== undefined && same_(newStage, e.oldValue)) return false;
+    var cell = sheet.getRange(r1, LC.SUBSTAGE);
+    cell.clearContent();
+    cell.setDataValidation(ruleFor(newStage));
+    return true;
+  }
+
+  // Pasted / filled block: only rows whose stage actually changed (compared with the snapshot).
+  var n = r2 - r1 + 1;
+  var stages = sheet.getRange(r1, LC.STAGE, n, 1).getValues();
+  var subs = sheet.getRange(r1, LC.SUBSTAGE, n, 1).getValues();
+  var snaps = sheet.getRange(r1, LC.SNAPSHOT, n, 1).getValues();
+  var rules = [], changed = false;
+  for (var i = 0; i < n; i++) {
+    var snap = parseSnapshot_(snaps[i][0]);
+    if (!snap || !same_(snap.s, stages[i][0])) { subs[i][0] = ''; changed = true; }
+    rules.push([ruleFor(stages[i][0])]);
+  }
+  if (changed) sheet.getRange(r1, LC.SUBSTAGE, n, 1).setValues(subs);
+  sheet.getRange(r1, LC.SUBSTAGE, n, 1).setDataValidations(rules);
+  return changed;
+}
+
+/** Installable onOpen (created by setup): records who opened the master spreadsheet. */
+function onOpenInstallable(e) {
+  try {
+    var email = e && e.user && e.user.getEmail ? e.user.getEmail() : '';
+    if (!email) {
+      // Same hand-off as for edits: the simple onOpen (runs as the opener) cached their temporary key.
+      var cache = CacheService.getScriptCache();
+      for (var i = 0; i < 8 && !email; i++) {
+        var key = cache.get('OPK');
+        if (key) email = PropertiesService.getScriptProperties().getProperty(PROP.USER_KEY_PREFIX + key) || '';
+        if (!email) Utilities.sleep(250);
+      }
+    }
+    logAccess_(email, ACCESS.SHEET_OPENED, '', '', 'Spreadsheet');
+  } catch (err) { /* never block opening */ }
+}
+
+/** Hourly time trigger (created by setup): data-quality flags (overdue changes daily) + dashboard. */
+function scheduledMaintenance() {
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(60000)) return;
+  try {
+    clearMemo_();
+    refreshDataQuality_();
+  } finally {
+    lock.releaseLock();
+  }
+  refreshDashboardData_();
 }
 
 /**
@@ -55,7 +147,7 @@ function handleEdit_(e) {
     switch (sheet.getName()) {
       case SHEET.LEADS: onLeadSheetEdit_(e, sheet, range); break;
       case SHEET.STAGES: onStageMasterEdit_(e, sheet, range); break;
-      case SHEET.SETTINGS: onCustomFieldTableEdit_(range); break;
+      case SHEET.SETTINGS: onSettingsEdit_(range); break;
       case SHEET.COUNSELLORS: onCounsellorMasterEdit_(e, sheet, range); break;
       case SHEET.LOG: onLogEdit_(e, sheet, range); break;
       case SHEET.DASHBOARD: onDashboardEdit_(e, sheet, range); break;
@@ -170,6 +262,7 @@ function processLeadRows_(sheet, startRow, n, ctx) {
   var idIndex = null;
   var getIdIndex = function () { if (!idIndex) idIndex = buildIdIndex_(sheet, startRow, n); return idIndex; };
   var seen = {};
+  var leadIdx = [];
   var maxImported = 0;
   var idRe = new RegExp('^' + escapeRegex_(settings.leadPrefix) + '(\\d+)$', 'i');
 
@@ -185,6 +278,7 @@ function processLeadRows_(sheet, startRow, n, ctx) {
       messages.push('Lead IDs are generated by the system; ' + ctx.oldValue + ' was restored.');
     }
     if (!hasLeadData_(row)) continue;
+    leadIdx.push(i);
 
     var id = str_(row[LC.ID - 1]);
     if (id && idTouched) {
@@ -251,6 +345,7 @@ function processLeadRows_(sheet, startRow, n, ctx) {
   if (maxImported) bumpLeadSeq_(maxImported);
   writeChangedColumns_(sheet, startRow, data, changed);
   if (validationIdx.length) applySubstageValidations_(sheet, startRow, data, validationIdx, stageInfo);
+  if (leadIdx.length) writeDqFlagsForBlock_(sheet, startRow, data, leadIdx);
   if (entries.length) appendLogRows_(entries);
   return { messages: messages, logged: entries.length };
 }
@@ -364,7 +459,13 @@ function trackLeadChanges_(row, snap, ctx) {
     subChanged = !same_(cur.ss, snap.ss);
   }
   if (subChanged && !(cleared && same_(snap.ss, cleared))) {
-    audit(ACT.STAGE_UPDATED, CATEGORY.RECORD, 'Lead Substage', snap.ss, cur.ss);
+    if (out.stageChanged && !cur.ss && snap.ss) {
+      // Cleared by the fast onEdit path (or the form) because the stage changed.
+      audit(ACT.SUBSTAGE_CLEARED, CATEGORY.SYSTEM, 'Lead Substage', snap.ss, '',
+        'Substage cleared because the stage changed to "' + (cur.s || '(no stage)') + '"');
+    } else {
+      audit(ACT.STAGE_UPDATED, CATEGORY.RECORD, 'Lead Substage', snap.ss, cur.ss);
+    }
     if (!out.stageChanged) setCol(LC.STAGE_CHANGED, ctx.now);
   }
 
@@ -531,6 +632,7 @@ function applySubstageValidations_(sheet, startRow, data, idxList, stageInfo) {
 /** Rebuilds every row's substage dropdown from Stage Master in one batch call. */
 function refreshAllSubstageValidations_() {
   clearMemo_('stageInfo');
+  clearSubstageMapCache_();
   var sheet = getSheet_(SHEET.LEADS);
   var last = lastLeadRow_(sheet);
   if (last < 2) return 0;
@@ -580,6 +682,7 @@ function onStageMasterEdit_(e, sheet, range) {
   }
   var c1 = range.getColumn(), c2 = range.getLastColumn();
   if (c2 < SM.STAGE || c1 > SM.ACTIVE) return;
+  clearSubstageMapCache_();
   var lock = LockService.getDocumentLock();
   if (!lock.tryLock(20000)) { toast_('Busy - run Lead CRM > Refresh substage dropdowns in a moment.'); return; }
   try {
@@ -641,13 +744,27 @@ function onLogEdit_(e, sheet, range) {
 function onDashboardEdit_(e, sheet, range) {
   var r = range.getRow();
   if (r !== DASH.CONTROL_ROW) return;
-  writeDashboardTimestamp_(sheet);
   var period = str_(sheet.getRange(DASH.PERIOD).getValue());
   if (period === 'Custom Date Range') {
     var f = sheet.getRange(DASH.CUSTOM_FROM).getValue();
     var t = sheet.getRange(DASH.CUSTOM_TO).getValue();
-    if (!f || !t) toast_('Enter both Custom From and Custom To dates.');
-    else if (f > t) toast_('Custom From date is after Custom To date.');
+    if (!f || !t) { toast_('Enter both Custom From and Custom To dates.'); return; }
+    if (f > t) toast_('Custom From date is after Custom To date.');
+  }
+  toast_('Updating dashboard...', 5);
+  refreshDashboardData_();
+}
+
+/** Lists & Settings edits: custom-field table or the Counsellor-Locked Fields list. */
+function onSettingsEdit_(range) {
+  if (onCustomFieldTableEdit_(range)) return;
+  var c1 = range.getColumn(), c2 = range.getLastColumn();
+  if (c1 <= LS.LOCKED && c2 >= LS.LOCKED && range.getLastRow() >= 2) {
+    clearMemo_();
+    applyLockedColumns_();
+    toast_('Locked columns updated: ' + lockedCols_().filter(function (c) {
+      return LEAD_SYSTEM_COLS.indexOf(c) < 0 && LEAD_FORMULA_COLS.indexOf(c) < 0;
+    }).map(function (c) { return colLetter_(c); }).join(', ') + ' (plus all system / formula columns).');
   }
 }
 
@@ -687,7 +804,8 @@ function useInstallableEditTrigger() {
   var exists = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'onEditInstallable'; });
   if (!exists) ScriptApp.newTrigger('onEditInstallable').forSpreadsheet(ss).onEdit().create();
   PropertiesService.getDocumentProperties().setProperty(PROP.EDIT_MODE, 'installable');
-  toast_('Edit tracking now uses the installable trigger (runs as you). Simple onEdit is idle.');
+  applyProtections_(ss);
+  toast_('Installable edit trigger active (runs as you). Locked columns now use STRICT protection.');
 }
 
 function useSimpleEditTrigger() {
@@ -696,5 +814,6 @@ function useSimpleEditTrigger() {
     if (t.getHandlerFunction() === 'onEditInstallable') ScriptApp.deleteTrigger(t);
   });
   PropertiesService.getDocumentProperties().setProperty(PROP.EDIT_MODE, 'simple');
-  toast_('Edit tracking now uses the simple onEdit trigger (runs as each editor).');
+  applyProtections_(ss_());
+  toast_('Legacy simple mode: onEdit runs as each editor and locked columns fall back to WARNING-only protection.');
 }

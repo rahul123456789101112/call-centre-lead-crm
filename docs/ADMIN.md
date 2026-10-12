@@ -113,9 +113,14 @@ Counsellor Master columns:
 - Active / Inactive Status
 - Date Added (auto)
 
-**Add a counsellor:** type the name in the next empty row. ID, `Active` and today's date are filled in automatically. Add their email, then share the spreadsheet with them as Editor. The Assigned Counsellor dropdown updates immediately; no formula change is needed.
+**Add a counsellor:**
+1. Type the name in the next empty row. ID, `Active` and today's date are filled in automatically.
+2. Add the email of **the Google account they will sign in with**. Any provider is fine (Gmail, company email, others), as long as it is a Google account. For Gmail, dots and `+tags` don't matter.
+3. Send them the counsellor link (**Lead CRM → Open counsellor web app**). Do **not** share the spreadsheet with them.
 
-**Deactivate:** set Status to `Inactive`. They vanish from the assignment dropdown and the follow-up form. Their history stays in the log, and they remain selectable in the Dashboard counsellor filter. Leads still assigned to them are flagged "Inactive/unknown counsellor" in column AH. Reassign them by selecting a new counsellor; each change records `Lead Assigned`, Previous Counsellor and Lead Assigned Date.
+The Assigned Counsellor dropdown updates immediately; no formula change is needed.
+
+**Deactivate:** set Status to `Inactive`. Their web-app access ends at their next click: every request re-checks Counsellor Master and they get "Access denied", which is logged. They also vanish from the assignment dropdown and the follow-up form. Their history stays in the log, and they remain selectable in the Dashboard counsellor filter. Leads still assigned to them are flagged "Inactive/unknown counsellor" in column AH. Reassign them by selecting a new counsellor; each change records `Lead Assigned`, Previous Counsellor and Lead Assigned Date.
 
 **Do not rename** a counsellor who already has history; add a new row instead. Historical log entries keep the name used at the time, which is intentional.
 
@@ -158,7 +163,15 @@ Every row gets its own audit entry (the old owner comes from the hidden snapshot
 | Require Next Follow-Up For Open Leads / Require Remarks On Follow-Up | Mandatory fields in the follow-up form |
 | Max Backdate Days For Activities | How far back a caller can date an activity |
 | Email Reminders Enabled / Reminder Hour | Change through the Admin menu, which also manages the trigger |
-| Admin Emails | Administrators (comma separated). Then run *Reapply protections*. |
+| Admin Emails | Administrators (comma separated, any email provider). They may use the Admin menu and the web app (all leads). Then run *Reapply protections*. |
+
+**Counsellor-Locked Fields (AD).** One Lead Management field name per row. Counsellors cannot edit these columns.
+- In the spreadsheet: **strict** protection, light-grey header and cells.
+- In the web app: shown read-only and rejected by the server.
+- Defaults: Lead ID, Mobile Number, Email ID, Assigned Counsellor, Lead Created Date, Lead Source.
+- System and formula columns are always locked, whatever the list says.
+- A custom field can be listed by its Field Name.
+- Adding or removing a name applies immediately: protection, colours and web-app permissions. If you later rename a listed custom field, update its name here too.
 
 Columns **R–X** are automatic helper lists. Do not type there.
 
@@ -166,27 +179,70 @@ Columns **R–X** are automatic helper lists. Do not type there.
 
 ## Access and protection model
 
+**Recommended setup:**
+- The **owner** runs setup and deploys the web app.
+- **Admins** are the only editors of the spreadsheet.
+- **Counsellors** use only the web app (see [CONFIDENTIALITY.md](CONFIDENTIALITY.md)).
+
 | Area | Protection |
 |---|---|
-| Stage Master, Counsellor Master, Lists & Settings, Dashboard (except its 5 filter cells), Lead Management header row | **Strict**: admins only |
-| Lead Management system and formula columns (A, V, W–X, AA, AC–AI) | **Warning**: callers see a warning. Typing into a formula column is undone automatically; typing into Lead ID is reverted. |
-| Follow-Up Log (whole sheet) | **Warning**: any manual edit is itself recorded as a `Log Edited` System entry |
+| Stage Master, Counsellor Master, Lists & Settings, Access Log, Dashboard (except its 5 filter cells), Lead Management header row | **Strict**: admins only |
+| Lead Management locked columns: all system/formula columns (A, V–X, AA, AC–AI) + *Counsellor-Locked Fields* (default also C, D, O, Z) | **Strict**: admins only. A counsellor typing there gets Google's standard "protected cell" error. Light-grey colouring marks them. |
+| Lead Management editable columns (name, custom fields, stage, substage, priority, last contact, next follow-up, outcome, remarks, status) | Not protected |
+| Follow-Up Log (whole sheet) | **Strict**: written by the script as the owner. An admin's manual edit is recorded as a `Log Edited` System entry. |
 
-Why warning-only? The edit trigger and the follow-up form run **as the caller**, so callers need technical write access. Callers must also be able to sort and filter.
+**How the script writes to strictly protected cells:**
+- the **installable** onEdit trigger, the hourly maintenance and the **web app** all run as the owner;
+- only the tiny substage fast path runs as the editor, and it writes only the unlocked Substage column.
 
-**Protected ranges are safeguards, not a security boundary.** Anyone with Editor access can, with effort, copy the file, use version history, or remove data. For stronger separation:
-- give managers **Viewer** or **Commenter** access;
-- keep the owner account separate from callers;
+In legacy simple mode (Admin menu) the same columns fall back to warning-only protection.
+
+**Consequences for counsellors who still use the spreadsheet (transition):**
+- they **cannot sort** Lead Management, because sorting would move locked cells. Use **Data → Create filter view**, a personal view that may sort and filter without affecting others;
+- the shared basic filter and the *Views* menu may also be refused. Filter views avoid that.
+
+**Protected ranges are safeguards, not a security boundary.** Anyone with Editor or Viewer access can copy, download or print the whole file. That is why counsellors should use the web app, which only ever sends them their own leads. Also:
+- keep the owner account separate from day-to-day users;
 - use **File → Version history** to recover;
-- consider a periodic copy (**File → Make a copy**) as a backup.
+- note that with a personal Gmail owner, **downloads and copies of the spreadsheet cannot be logged** (no Drive audit log). Keep the admin list small (CONFIDENTIALITY.md).
 
 Do not store passwords, ID numbers or other sensitive personal data in custom fields.
 
 ---
 
+## Counsellor web app and Access Log
+
+- **Link:** **Lead CRM → Open counsellor web app**.
+- **Deploying / updating:** SETUP.md §2. After code changes, deploy a **New version**.
+- **Who can get in (the only rule):** emails that are **Active** in Counsellor Master, or listed in **Admin Emails**. Any Google account and any email provider; no domain restriction. The spreadsheet owner gets in only if listed. Admins see all leads; counsellors only see leads whose Assigned Counsellor is their name.
+- **Sign-in:** counsellors use the counsellor link (the sign-in app). It proves their Google email to the web app with a signed, single-use token (SETUP.md §2 and §5).
+- **Sheet editors:** each person who edits the spreadsheet should run **Lead CRM → Identify me** once. Otherwise their edits show "Unidentified user", because Google does not reveal personal accounts' emails to the owner's trigger (SETUP.md §5).
+- **Reassigning a lead** moves it to the new counsellor's web app at their next refresh.
+- **Access Log sheet** (admins only), one row per event:
+  - Portal Opened
+  - Leads Listed (filter and the Lead IDs shown)
+  - Lead Viewed
+  - Lead Updated (field: old → new)
+  - Follow-Up Logged (Activity ID)
+  - Access Denied (unknown account, inactive counsellor, or another counsellor's lead)
+  - Copy In Browser (reported, best-effort)
+  - Spreadsheet Opened (admins, by the installable onOpen trigger)
+
+  It grows with use; archive it yearly (copy rows to another file, then delete them).
+
+---
+
+## Dashboard and data-quality refresh
+
+Both are calculated by the script, not by live formulas, for speed (SETUP.md §9).
+- **Dashboard:** recalculated when a yellow filter cell changes, hourly, and with **Lead CRM → Refresh Dashboard**. *Last Refreshed* shows the time.
+- **Data Quality Flags (AH):** updated for each edited row immediately, for all rows hourly, and on demand with **Admin → Recalculate data-quality flags**.
+
+---
+
 ## Importing or pasting many leads
 
-1. Paste the data into Lead Management. Paste values only (Ctrl+Shift+V) into the caller columns (B–U, Y–Z, AB; E–N only for active custom fields). Leave column A empty, or include existing unique IDs.
+1. Paste the data into Lead Management. Paste values only (Ctrl+Shift+V) into the data columns (B–U, Y–Z, AB; E–N only for active custom fields). As an admin you may also paste into locked columns such as mobile, email, owner and source. Leave column A empty, or include existing unique IDs.
 2. Pastes of up to ~2,000 rows are processed automatically: IDs, created dates, defaults, dropdowns and "Lead Created" log entries.
 3. For bigger imports, or if a toast said the system was busy, run **Lead CRM → Admin → Process imported / pasted leads**. It is safe to run any time.
 
@@ -202,6 +258,7 @@ The simple edit trigger has a 30-second limit, which is why very large pastes ne
 
 ## Edit trigger mode, reminders, health check
 
-- **Admin → Use installable edit trigger:** for a single Google Workspace domain only (see SETUP.md §5). **Use simple edit trigger** switches back.
+- **Admin → Use installable edit trigger + strict locking:** the default; setup creates it. It must be created by the owner or an admin who can edit every protected range.
+- **Admin → Use legacy simple edit trigger:** only for setups without installable triggers. Locking becomes warning-only.
 - **Admin → Enable / Disable daily email reminders**, and **Send reminders now (test)**.
-- **Admin → Run health check:** sheets, header formulas, named ranges, triggers, counters, identity, admin list, counsellors without emails.
+- **Admin → Run health check:** sheets, header formulas, named ranges, triggers (edit, change, open, hourly), counters, identity, admin list, locked columns, web app URL, counsellors without emails.

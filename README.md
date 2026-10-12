@@ -9,11 +9,14 @@ Running `setupWorkbook()` in a blank Google Sheet builds:
 - **Dashboard**: 12 KPIs, stage, substage, counsellor, ageing, exception, daily-trend and pending reports, and 6 charts, controlled by a date-range and counsellor filter.
 - **Lists & Settings**: dropdown lists, ageing buckets and settings.
 - A **Lead CRM** menu and a **Log Follow-Up** sidebar (LockService + duplicate-submission protection).
+- A **counsellor web app** (runs as the owner, open to any Google account; access only for Active counsellors and Admin Emails): each counsellor sees and edits only their own leads, with every view and edit recorded in an **Access Log**. The master sheet is shared with admins only.
+- **Strict, configurable column locking** for counsellors. An installable trigger running as the owner does the system writes.
 
 | Folder | Contents |
 |---|---|
-| [`apps-script/`](apps-script) | `Config.gs`, `Setup.gs`, `Triggers.gs`, `FollowUp.gs`, `FollowUpSidebar.html`, `Menu.gs`, `CustomFields.gs`, `appsscript.json` |
-| [`docs/`](docs) | [SETUP](docs/SETUP.md) · [ADMIN](docs/ADMIN.md) · [TESTING](docs/TESTING.md) · [TROUBLESHOOTING](docs/TROUBLESHOOTING.md) · [LIMITATIONS](docs/LIMITATIONS.md) |
+| [`apps-script/`](apps-script) | `Config.gs`, `Setup.gs`, `Triggers.gs`, `FollowUp.gs`, `FollowUpSidebar.html`, `Menu.gs`, `CustomFields.gs`, `DataQuality.gs`, `Dashboard.gs`, `Web.gs`, `Portal.html`, `appsscript.json` |
+| [`docs/`](docs) | [SETUP](docs/SETUP.md) · [ADMIN](docs/ADMIN.md) · [CONFIDENTIALITY](docs/CONFIDENTIALITY.md) · [TESTING](docs/TESTING.md) · [TROUBLESHOOTING](docs/TROUBLESHOOTING.md) · [LIMITATIONS](docs/LIMITATIONS.md) |
+| [`identity-app/`](identity-app) | Tiny separate sign-in app (runs as the visitor, permission: see your email only) that tells the counsellor web app who is signed in |
 | [`test/`](test) | Node.js mock of the Sheets services and scenario tests (`node test/run-mock-tests.js apps-script`) |
 
 **Quick start:**
