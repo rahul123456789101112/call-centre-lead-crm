@@ -4,11 +4,12 @@ These step-by-step checks cover every scenario in section 13 of `PROMPT.md`. Run
 
 **Preparation**
 1. Complete [SETUP.md](SETUP.md) §1–§2. `setupWorkbookQuickTest` (1,000 rows) is enough for these tests.
-2. **Run setup as the owner** and deploy the counsellor web app (SETUP.md §2).
-3. You need two more @companyname.com accounts:
+2. **Run setup as the owner** (a personal Gmail account is fine). Deploy the counsellor web app **and** the sign-in app (SETUP.md §2).
+3. You need two more Google accounts with **different email providers**, for example one Gmail and one company or Outlook address that has a Google account:
    - **Counsellor A**: put its email on *Sample Counsellor 1* in Counsellor Master;
    - **Counsellor B**: put its email on *Sample Counsellor 2*.
    Neither may be in *Admin Emails*.
+   You also need a third Google account that is in neither list (**Outsider**).
 4. Tests 1–14 are run as the admin in the spreadsheet unless stated otherwise. Tests marked **(web app)** are run as a counsellor in the web app.
 5. Run **Lead CRM → Identify me** as the admin. It should show your email and "CRM administrator: yes".
 
@@ -170,7 +171,7 @@ Set its Active Status to `Inactive`. It disappears from new selections. A lead a
 **Expected:**
 - Both activities are saved with distinct, sequential Activity IDs and no lost or duplicate rows (LockService serialises them)
 - Each lead row shows the right W (user) and X (time): *Sample Counsellor 1* / *Sample Counsellor 2*
-- The admin's edit shows the admin's email or name in W (identified by `e.user` in the installable trigger)
+- The admin's edit shows the admin's email or name in W (identified through the temporary-key hand-off, because the admin has used the Lead CRM menu)
 
 ### 16. Confirm dashboard metrics respond to the selected date range
 1. Cycle the Reporting Period through Today, Yesterday, Last 7 Days, Last 30 Days, Current Month, Previous Month.
@@ -196,8 +197,10 @@ Set its Active Status to `Inactive`. It disappears from new selections. A lead a
 
 ---
 
-## 18. Locked fields (counsellor editing the spreadsheet during transition)
+## 18. Locked fields and editor identity (counsellor editing the spreadsheet during transition)
 1. Share the spreadsheet with Counsellor A as **Editor** (only for this test).
+   - As Counsellor A, change Lead Remarks on a lead **before** using any menu item. **Expected:** W = *Unidentified user* (not registered yet).
+   - Then, as Counsellor A, run **Lead CRM → Identify me** (authorise when asked) and edit Remarks again. **Expected:** W = *Sample Counsellor 1*.
 2. As Counsellor A, try to type in Mobile Number (C), Email ID (D), Assigned Counsellor (O), Lead Source (Z), Lead ID (A), Lead Created Date (AA), Follow-Up Count (V) and Data Quality Flags (AH).
 
 **Expected:**
@@ -211,7 +214,7 @@ Set its Active Status to `Inactive`. It disappears from new selections. A lead a
 - W/X update with *Sample Counsellor 1* and the time, even though W/X are locked (the installable trigger writes them as the owner);
 - the Follow-Up Log gets the audit rows.
 
-4. As Counsellor A, **Lead CRM → Log Follow-Up**. **Expected:** the sidebar shows the web app (or an "open in a new tab" link), and saving works.
+4. As Counsellor A, **Lead CRM → Log Follow-Up**. **Expected:** the sidebar shows an *Open the counsellor web app* button. It opens the sign-in app in a new tab, and saving a follow-up there works.
 5. As admin, add `Lead Remarks` to *Counsellor-Locked Fields* (Lists & Settings AD).
 
 **Expected:**
@@ -222,18 +225,25 @@ Set its Active Status to `Inactive`. It disappears from new selections. A lead a
 Remove it again afterwards.
 6. Stop sharing the spreadsheet with Counsellor A.
 
-## 19. Counsellor web app: confidentiality and access log (web app)
-1. As Counsellor A, open the web app.
+## 19. Counsellor web app: sign-in, confidentiality and access log (web app)
+1. As Counsellor A, open the **counsellor link** (the sign-in app's URL).
 
-**Expected:** only leads assigned to *Sample Counsellor 1* are listed. Tabs: Due & overdue / All open / All my leads; search works.
+**Expected:**
+- the first time, Google asks to allow "See your primary Google Account email address";
+- then "Signed in as …" and the web app opens;
+- only leads assigned to *Sample Counsellor 1* are listed. Tabs: Due & overdue / All open / All my leads; search works.
 
-2. As Counsellor A, edit the URL to `…/exec?lead=<ID of a lead assigned to Counsellor B>`.
+2. As Counsellor A, open the counsellor link with `?lead=<ID of a lead assigned to Counsellor B>` added.
 
 **Expected:** "not assigned to you"; the Access Log shows *Access Denied* with that Lead ID.
 
-3. As a @companyname.com account that is **not** in Counsellor Master, open the link.
+3. As **Outsider**, open the counsellor link.
 
-**Expected:** "Access denied"; logged.
+**Expected:** "Access denied" naming Outsider's email; logged.
+
+   - Also open the **main** web app URL directly (not the counsellor link) in a private window. **Expected:** "Please sign in", with a *Sign in with Google* link.
+   - Copy a `…/exec?t=…` URL from the browser history after signing in and open it again. **Expected:** "Sign-in link expired" (tokens are single-use and valid for 5 minutes).
+   - Gmail check: if Counsellor A's Counsellor Master email is `first.last@gmail.com`, signing in as `firstlast@gmail.com` (the same Google account) is accepted.
 
 4. Set Counsellor A to `Inactive` in Counsellor Master, then click anything in A's open web app.
 
@@ -253,7 +263,10 @@ Remove it again afterwards.
 **Expected:** an Access Log row *Copy In Browser (reported)* (best-effort, at most one per 30 s).
 
 9. Check the Access Log sheet for: *Portal Opened, Leads Listed* (with IDs), *Lead Viewed, Lead Updated, Follow-Up Logged, Access Denied, Spreadsheet Opened* (when an admin opens the sheet).
-10. As a Workspace admin (optional), download the spreadsheet as an admin, then find the *Download* event in Admin console → Reporting → Audit and investigation → Drive log events.
+10. Add Counsellor B's email to *Admin Emails* (Lists & Settings). B now sees all leads in the web app. Remove it again afterwards.
+11. Leave the web app open for more than 6 hours (or clear the site data), then click something. **Expected:** "Your session has expired - Sign in again".
+
+Downloads and copies of the spreadsheet itself **cannot** be logged with a personal Gmail owner (no Drive audit log); see CONFIDENTIALITY.md.
 
 ## 20. Speed
 1. With at least 1,000 leads (paste test data and run *Process imported / pasted leads*), change Lead Stage on several rows in a row.
@@ -283,7 +296,7 @@ Remove it again afterwards.
 
 ## Automated pre-release check (developers)
 
-[`test/`](../test) contains an in-memory mock of the Sheets services and a scenario script. It runs `setupWorkbookQuickTest()`, the stage-change fast path (checked before any logging), strict locking and the configurable locked list, script-computed data-quality flags and dashboard KPIs, the web app's access control, ownership checks, field locks and Access Log, an old-layout migration, the custom-field add/remove/rename flows, and a staged `setupWorkbook()` (forced to stop after every stage, to prove it resumes), simulates edits, pastes, sorting, sidebar submissions, Stage/Counsellor Master changes and log tampering, and asserts the results. It also checks that every formula the script writes has balanced parentheses, braces and quotes.
+[`test/`](../test) contains an in-memory mock of the Sheets services and a scenario script. It runs `setupWorkbookQuickTest()`, the stage-change fast path (checked before any logging), editor identity through the temporary-key hand-off (with blank `e.user`, as for personal accounts), the full sign-in flow through the real `identity-app/Identity.gs` (valid, reused, tampered and expired tokens; Gmail address variants; any-provider admins; deactivation), strict locking and the configurable locked list, script-computed data-quality flags and dashboard KPIs, the web app's access control, ownership checks, field locks and Access Log, an old-layout migration, the custom-field add/remove/rename flows, and a staged `setupWorkbook()` (forced to stop after every stage, to prove it resumes), simulates edits, pastes, sorting, sidebar submissions, Stage/Counsellor Master changes and log tampering, and asserts the results. It also checks that every formula the script writes has balanced parentheses, braces and quotes.
 
 ```
 node test/run-mock-tests.js apps-script

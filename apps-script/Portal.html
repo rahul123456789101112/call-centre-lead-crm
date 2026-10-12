@@ -107,7 +107,13 @@
     values.forEach(function (v) { h += '<option value="' + esc(v) + '"' + (v === selected ? ' selected' : '') + '>' + esc(v) + '</option>'; });
     return h;
   }
-  function fail(id) { return function (e) { busy = false; enable(true); msg(id, 'err', esc(e && e.message ? e.message : e)); }; }
+  function errText(e) {
+    var m = String(e && e.message ? e.message : e);
+    if (/SESSION_EXPIRED/.test(m)) return 'Your session has expired. ' + (BOOT.signIn ? '<a href="' + esc(BOOT.signIn) + '" target="_top">Sign in again</a>' : 'Reload the page.');
+    if (/ACCESS_DENIED/.test(m)) return 'Access denied - your account is no longer an active counsellor.';
+    return esc(m);
+  }
+  function fail(id) { return function (e) { busy = false; enable(true); msg(id, 'err', errText(e)); }; }
   function enable(on) { ['saveBtn', 'fuBtn'].forEach(function (b) { $(b).disabled = !on; }); }
   function run() { return google.script.run; }
 
@@ -124,7 +130,7 @@
 
   function loadList() {
     msg('listMsg', 'info', 'Loading...');
-    run().withSuccessHandler(showList).withFailureHandler(fail('listMsg')).portalListLeads(filter, $('search').value);
+    run().withSuccessHandler(showList).withFailureHandler(fail('listMsg')).portalListLeads(BOOT.sid, filter, $('search').value);
   }
 
   function showList(res) {
@@ -151,8 +157,8 @@
     $('fields').innerHTML = 'Loading...';
     run().withSuccessHandler(showLead).withFailureHandler(function (e) {
       $('fields').innerHTML = '';
-      msg('saveMsg', 'err', esc(e && e.message ? e.message : e));
-    }).portalGetLead(id);
+      msg('saveMsg', 'err', errText(e));
+    }).portalGetLead(BOOT.sid, id);
   }
 
   function fieldOptions(f) {
@@ -228,7 +234,7 @@
       if (!res.ok) { msg('saveMsg', 'err', (res.errors || ['Not saved.']).map(esc).join('<br>')); return; }
       msg('saveMsg', 'ok', res.unchanged ? 'Nothing changed.' : 'Saved.' + (res.messages && res.messages.length ? '<br>' + res.messages.map(esc).join('<br>') : ''));
       showLead(res.lead);
-    }).withFailureHandler(fail('saveMsg')).portalSaveLead(lead.id, changes);
+    }).withFailureHandler(fail('saveMsg')).portalSaveLead(BOOT.sid, lead.id, changes);
   }
 
   function saveFollowUp() {
@@ -248,7 +254,7 @@
       msg('fuMsg', 'ok', 'Saved as ' + esc(res.activityId) + '.');
       $('fuRemarks').value = ''; $('fuOutcome').value = ''; $('fuType').value = ''; $('fuNext').value = '';
       openLead(lead.id);
-    }).withFailureHandler(fail('fuMsg')).portalSubmitFollowUp({
+    }).withFailureHandler(fail('fuMsg')).portalSubmitFollowUp(BOOT.sid, {
       submissionId: subId, leadId: lead.id, counsellor: ctx.user.name || $('fuCns').value,
       activityType: $('fuType').value, outcome: $('fuOutcome').value,
       activityTime: $('fuTime').dataset.touched ? $('fuTime').value : '',
@@ -261,7 +267,7 @@
   document.addEventListener('copy', function () {
     if (Date.now() - lastCopy < 30000) return;
     lastCopy = Date.now();
-    google.script.run.portalLogClientEvent('copy', lead ? lead.id : '(list)');
+    google.script.run.portalLogClientEvent(BOOT.sid, 'copy', lead ? lead.id : '(list)');
   });
 
   $('tabs').onclick = function (e) {
@@ -279,8 +285,8 @@
   $('fuTime').oninput = function () { this.dataset.touched = '1'; };
 
   google.script.run.withSuccessHandler(start).withFailureHandler(function (e) {
-    $('who').textContent = /ACCESS_DENIED/.test(String(e && e.message)) ? 'Access denied - your account is not an active counsellor.' : 'Could not load: ' + (e && e.message ? e.message : e);
-  }).portalInit();
+    $('who').innerHTML = errText(e);
+  }).portalInit(BOOT.sid);
 </script>
 </body>
 </html>

@@ -145,15 +145,11 @@
         'Ask a CRM administrator to deploy it (docs/SETUP.md, "Counsellor web app").</div>';
       return;
     }
-    var bar = document.createElement('div');
-    bar.style.cssText = 'font-size:11px;margin:0 0 6px';
-    bar.innerHTML = 'Counsellor web app - <a href="' + esc(c.webAppUrl) + '" target="_blank" rel="noopener">open in a new tab</a> if it does not load below.';
-    var frame = document.createElement('iframe');
-    frame.src = c.webAppUrl;
-    frame.style.cssText = 'border:0;width:100%;height:calc(100vh - 40px)';
-    document.body.style.padding = '6px';
-    document.body.appendChild(bar);
-    document.body.appendChild(frame);
+    // Sign-in needs a full browser tab (Google's permission screen cannot run inside a sidebar).
+    document.body.innerHTML = '<h2>Log Follow-Up</h2><p>Counsellors log follow-ups in the counsellor web app.</p>' +
+      '<p><a class="btn" href="' + esc(c.webAppUrl) + '" target="_blank" rel="noopener" ' +
+      'style="display:inline-block;background:#1F3864;color:#fff;padding:9px 14px;border-radius:4px;text-decoration:none;font-weight:600">' +
+      'Open the counsellor web app</a></p><p class="hint">It opens in a new tab and signs you in with your Google account.</p>';
   }
 
   function init(c) {

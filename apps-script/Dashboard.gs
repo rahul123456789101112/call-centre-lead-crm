@@ -478,6 +478,7 @@ function refreshDashboardCharts_() {
 
 /** Menu: Lead CRM > Refresh Dashboard. */
 function refreshDashboard() {
+  registerCurrentUser_();
   var sh = getSheet_(SHEET.DASHBOARD);
   try {
     refreshDashboardData_();

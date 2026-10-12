@@ -7,7 +7,7 @@ This builds the complete Call Centre Lead CRM inside a **blank Google Sheet** us
 ## 1. Install (about 10 minutes, done once by the administrator)
 
 1. Create a new, blank Google Sheet (sheets.new), for example "Lead CRM".
-   Use the Google account that will **own** the CRM: a **@companyname.com** Workspace account, ideally a shared team account and not a counsellor's personal account.
+   Use the Google account that will **own** the CRM. A personal Gmail account is fine; ideally use a dedicated account for the CRM rather than a counsellor's own.
    **The owner must run setup and deploy the web app.** The installable triggers and the web app run as that account, which is what lets them write to columns counsellors cannot edit.
 2. Set the sheet's time zone: **File → Settings → General → Time zone** (for example, *(GMT+05:30) India Standard Time*).
    All dates, "today", overdue checks and timestamps use this time zone.
@@ -78,27 +78,46 @@ The first time you run setup, Google shows **"Authorization required"**:
 
 ### Counsellor web app (recommended for confidentiality)
 
-Counsellors work in a web app instead of the spreadsheet; [CONFIDENTIALITY.md](CONFIDENTIALITY.md) explains why. As the **owner**:
+Counsellors work in a web app instead of the spreadsheet; [CONFIDENTIALITY.md](CONFIDENTIALITY.md) explains why. It has **two parts**:
+- the **main web app** (this project), which runs as the owner;
+- a tiny **sign-in app** (separate project, folder [`identity-app/`](../identity-app)), which runs as the visitor and tells the main app who they are.
 
-1. In the Apps Script editor: **Deploy → New deployment → ⚙ Select type → Web app**.
-2. Description: `Counsellor portal`.
-3. **Execute as: Me (owner@companyname.com)**.
-4. **Who has access: Anyone within companyname.com**. Not "Anyone". The included `appsscript.json` pre-sets these two values (`executeAs: USER_DEPLOYING`, `access: DOMAIN`).
-5. Click **Deploy**, authorise, and copy the **Web app URL** (ends with `/exec`).
-6. Back in the sheet, **Lead CRM → Open counsellor web app** should show the URL. If it says "not deployed", use **Admin → Set counsellor web app URL**.
-7. Send the URL to counsellors. Each must be an **Active** row in Counsellor Master with their @companyname.com email.
-8. **Stop sharing the spreadsheet with counsellors** (Share → remove them). Keep admins only.
+Counsellors can use **any email that has a Google account** (Gmail, company email or any other provider). Do everything below as the **owner**.
 
-**After every code change:** Deploy → Manage deployments → ✏ → Version: **New version** → Deploy. The URL stays the same.
+**A. Deploy the main web app**
+1. In this project's Apps Script editor: **Deploy → New deployment → ⚙ Select type → Web app**. Description `Counsellor portal`.
+2. **Execute as: Me**.
+3. **Who has access: Anyone with a Google account**. Not "Anyone", which would allow anonymous visitors.
+   The included `appsscript.json` pre-sets both values (`executeAs: USER_DEPLOYING`, `access: ANYONE`).
+4. Deploy, authorise, and note the **Web app URL** (ends with `/exec`).
+
+**B. Create the sign-in app**
+5. Go to script.google.com → **New project**. Name it `Lead CRM sign-in`. It is a standalone project, not bound to the sheet.
+6. Replace `Code.gs` with [`identity-app/Identity.gs`](../identity-app/Identity.gs).
+7. Turn on "Show appsscript.json" in Project Settings and paste [`identity-app/appsscript.json`](../identity-app/appsscript.json). It requests **only** "see your email address" and sets *Execute as: User accessing the web app* and *Who has access: Anyone with a Google account*.
+
+**C. Connect them**
+8. In the spreadsheet: **Lead CRM → Admin → Web app sign-in setup**. It shows a generated **IDENTITY_SECRET** and the main app's URL.
+9. In the sign-in project: **Project Settings → Script properties → Add**:
+   - `IDENTITY_SECRET` = the secret shown;
+   - `MAIN_APP_URL` = the main web app URL.
+10. Sign-in project: **Deploy → New deployment → Web app**. Check that it says *Execute as: User accessing the web app* and *Who has access: Anyone with a Google account*. Deploy and copy its `/exec` URL.
+11. Back in the dialog from step 8, paste the sign-in app's URL and click OK.
+
+**D. Go live**
+12. **Lead CRM → Open counsellor web app** now shows the **counsellor link**, which is the sign-in app's URL. Send it to counsellors.
+    - The first time, Google asks each counsellor to allow "See your primary Google Account email address".
+    - Each counsellor must be an **Active** row in Counsellor Master with the email of the Google account they sign in with. Admins in *Admin Emails* can use the link too.
+13. **Stop sharing the spreadsheet with counsellors** (Share → remove them). Keep admins only.
+
+**After every code change:** Deploy → Manage deployments → ✏ → Version: **New version** → Deploy, for the main web app (and the sign-in app if `Identity.gs` changed). The URLs stay the same.
 
 ### Counsellors still using the spreadsheet (transition)
 
 If counsellors keep editor access for a while:
 - they can edit only unlocked (non-grey) columns;
-- **Lead CRM → Log Follow-Up** shows them the web app inside the sidebar;
-- the sidebar includes an *open in a new tab* link if the embedded view does not load.
-
-Admins use the classic sidebar directly.
+- **Lead CRM → Log Follow-Up** shows them a button that opens the counsellor web app in a new tab;
+- each must use the Lead CRM menu once (for example **Identify me**) so their sheet edits can be attributed (§5).
 
 ## 3. Permissions the script uses
 
@@ -110,11 +129,13 @@ Admins use the classic sidebar directly.
 | `script.send_mail` | Optional daily reminder emails, which stay **off** until an admin enables them |
 | `userinfo.email` | Identify the person making a change (Last Updated By, audit trail) |
 
+The **sign-in app** (separate project) requests only `userinfo.email` ("See your primary Google Account email address"). That is all counsellors are asked to allow.
+
 The script stores no passwords or credentials. The only person-related data it adds is:
 - account emails in the Follow-Up Log's "Updated By" column and in the Access Log, and
 - an internal key→email mapping (Script Properties), used only in legacy simple mode.
 
-The web app needs no extra scopes. It runs with the owner's authorisation, and visitors only sign in to Google.
+The main web app needs no extra scopes; it runs with the owner's authorisation.
 
 ## 4. First configuration (admin)
 
@@ -130,22 +151,33 @@ The web app needs no extra scopes. It runs with the owner's authorisation, and v
 6. Run **Lead CRM → Admin → Run health check** and resolve anything marked `CHECK`.
 7. Delete any test leads and log rows. Optionally reset the counters (see [ADMIN.md](ADMIN.md#resetting-ids-before-go-live)).
 
-## 5. How users are identified (Google Workspace, one organisation)
+## 5. How users are identified (personal Google accounts, any email provider)
 
-All counsellors and admins use **@companyname.com** accounts in the same Workspace organisation as the owner. That is the case where Google reliably tells a script who the user is.
+The owner is a personal Google account, and editors and counsellors may use any Google account. In this setup **Google does not give a script the email of a person it is not running as**:
+- `Session.getActiveUser()` and the edit event's `e.user` come back **empty** for everyone except the owner, both in the owner's installable triggers and in the owner-run web app;
+- the email *is* available whenever code runs **as that person**, after they have authorised it.
 
-| Where the change happens | Code runs as | How the user is identified |
+The CRM uses only those reliable cases:
+
+| Where | Code runs as | How the user is identified |
 |---|---|---|
-| Edit in the spreadsheet (admins; counsellors during transition) | **Owner**: the installable `onEditInstallable` trigger created by setup | `e.user.getEmail()` in the edit event. Google fills it for editors in the same domain as the trigger's owner. |
-| Counsellor web app | **Owner**: deployed "Execute as: Me" | `Session.getActiveUser().getEmail()`. Google returns the visitor's email for same-domain web apps, and the app rejects anyone else. |
-| Admin sidebar / menu | The admin themself | `Session.getActiveUser().getEmail()` |
-| Simple `onEdit` (stage fast path only) | The editor | Not needed: it only clears the substage and sets the dropdown |
+| **Counsellor web app** | Owner (main app) + **visitor (sign-in app)** | The sign-in app runs as the visitor and reads their Google-verified email. It passes the email to the main app in a signed, 5-minute, single-use token; the main app keeps a 6-hour session. Fully reliable for any Google account. See CONFIDENTIALITY.md. |
+| **Lead CRM menu, admin sidebar** | The user themself (they authorised the script) | `Session.getActiveUser().getEmail()`. Reliable. At the same time the script records their Google **temporary user key** → email in Script Properties ("registration"). |
+| **Edits in the spreadsheet** | The simple `onEdit` runs **as the editor**; the installable `onEditInstallable` runs **as the owner** | The simple trigger caches the editor's temporary user key for that exact edit (`EDK_…`, 2 minutes). The installable trigger picks it up (waits up to 3 s) and looks up the registered email. |
+| **Spreadsheet opened** | Simple `onOpen` (as the opener) + installable `onOpenInstallable` (as the owner) | Same hand-off: the opener's key is cached, then resolved to their registered email |
 
-The email is mapped to a name through **Counsellor Master → Email ID**. *Last Updated By* shows that name, or the email for admins without a counsellor row. In the unlikely case Google returns no email (for example a guest account from another domain), the edit is still saved and audited, labelled "Unidentified user".
+**Registration** happens automatically whenever someone uses the Lead CRM menu: Identify me, Log Follow-Up, Refresh Dashboard, Views, or any Admin item.
+- Google **rotates the temporary key every 30 days**. The next menu use re-registers it.
+- An editor who has **never** used the menu, or not since the key rotated, shows as **"Unidentified user"**. Their edit is still saved, timestamped and audited.
+- Ask every admin who edits the sheet to run **Lead CRM → Identify me** once. The health check shows how many identities are registered.
+
+**Why not just `Session.getActiveUser()` in the trigger?** For personal accounts it is blank in the owner's trigger. The temporary key is Google's documented way to recognise a returning user without revealing their email. Mapping it to an email the user disclosed in an authorised context is the most reliable method available inside a spreadsheet. The web app needs no such workaround, because the sign-in app asks Google directly.
+
+Emails are mapped to names through **Counsellor Master → Email ID**, case-insensitively, ignoring Gmail dots and `+tags`. *Last Updated By* shows the counsellor name, or the email for admins without a counsellor row.
 
 **Edit-trigger modes** (Lead CRM → Admin):
 - **Installable + strict locking (default):** described above. Locked columns use **strict** protection: Google rejects a counsellor's edit with its standard "You are trying to edit a protected cell or object" message, and only the owner/admins and the script can change them.
-- **Legacy simple mode:** for setups without the installable trigger. `onEdit` runs as the editor, so locked columns fall back to **warning-only** protection. Not recommended for your organisation.
+- **Legacy simple mode:** for setups without the installable trigger. `onEdit` runs as the editor, so locked columns fall back to **warning-only** protection. Not recommended.
 
 ## 6. What setup builds
 

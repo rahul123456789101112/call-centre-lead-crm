@@ -3,13 +3,17 @@
  * Edit handling: Lead IDs, fixed timestamps, dependent stage/substage dropdowns,
  * stage-change validation, duplicate checks, data-quality flags and the audit trail.
  *
+ * Identity (personal Google accounts): Google does not give the owner's installable trigger the
+ * editor's email. The simple trigger therefore caches the editor's temporary user key for each edit
+ * (rememberEditor_), and the installable trigger maps it to the email the person registered by using
+ * the Lead CRM menu at least once (see Config.gs > getActor_ and docs/SETUP.md section 5).
+ *
  * Two triggers fire for every edit:
  *  - onEdit(e) (simple, runs as the editor, starts fastest) does ONLY the stage-change fast path:
  *    clear the row's substage and set its new dropdown. No logging, no lock, no other reads.
  *  - onEditInstallable(e) (installable, created by setup, runs as the owner) does everything else:
  *    IDs, timestamps, audit trail, data-quality flags. Because it runs as the owner it can write to
- *    columns that are STRICTLY protected against counsellors. In a Google Workspace domain e.user
- *    identifies the editor.
+ *    columns that are STRICTLY protected against counsellors.
  * Legacy "simple" mode (Admin menu) lets onEdit do the full work instead, with warning-only protection.
  */
 
@@ -25,6 +29,7 @@ function onEdit(e) {
   } catch (err) {
     console.warn('fastStageChange_: ' + (err && err.message ? err.message : err));
   }
+  rememberEditor_(e);   // identity hand-off for the installable trigger (personal Google accounts)
   if (getEditMode_() === 'simple') handleEdit_(e);
 }
 
@@ -90,6 +95,15 @@ function fastStageChange_(e) {
 function onOpenInstallable(e) {
   try {
     var email = e && e.user && e.user.getEmail ? e.user.getEmail() : '';
+    if (!email) {
+      // Same hand-off as for edits: the simple onOpen (runs as the opener) cached their temporary key.
+      var cache = CacheService.getScriptCache();
+      for (var i = 0; i < 8 && !email; i++) {
+        var key = cache.get('OPK');
+        if (key) email = PropertiesService.getScriptProperties().getProperty(PROP.USER_KEY_PREFIX + key) || '';
+        if (!email) Utilities.sleep(250);
+      }
+    }
     logAccess_(email, ACCESS.SHEET_OPENED, '', '', 'Spreadsheet');
   } catch (err) { /* never block opening */ }
 }

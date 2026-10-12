@@ -1,11 +1,11 @@
 /**
  * Web.gs
  * Counsellor web app ("portal"). Deploy as: Execute as = Me (the CRM owner), Who has access =
- * Anyone within <your Google Workspace domain>. See docs/CONFIDENTIALITY.md and docs/SETUP.md.
+ * Anyone with a Google account. Sign-in goes through the separate identity app (/identity-app).
+ * See docs/CONFIDENTIALITY.md and docs/SETUP.md.
  *
- * - Every request re-identifies the signed-in user (Session.getActiveUser(), available because
- *   the visitor is in the same Workspace domain as the owner) and checks Counsellor Master:
- *   only ACTIVE counsellors with that email (or CRM admins) get in.
+ * - Every request re-checks the signed-in user against the access rule: an ACTIVE counsellor in
+ *   Counsellor Master or an email in Admin Emails. Nothing else (any email provider is fine).
  * - A counsellor only ever receives leads assigned to them; every check runs on the server.
  * - Only fields that are not in "Counsellor-Locked Fields" can be changed.
  * - Every list view, lead view, edit, follow-up, denied attempt and reported browser copy is
@@ -20,32 +20,70 @@ var ACCESS = {
 };
 
 /* ================================================================== */
-/* Entry point                                                         */
+/* Entry point and sign-in                                             */
 /* ================================================================== */
+/*
+ * Who is the visitor?  This app executes as the owner (a personal Google account) and is open to
+ * "Anyone with a Google account", so Google does NOT tell it the visitor's email
+ * (Session.getActiveUser() is blank for everybody except the owner). Identity therefore comes from a
+ * second, tiny "sign-in" web app (folder /identity-app) that runs AS THE VISITOR with only the
+ * "see your email address" permission. It reads the visitor's verified email from Google and sends
+ * them here with a short-lived token signed with a shared secret (HMAC-SHA256). This app verifies
+ * the signature, expiry (5 min) and single use, then opens a 6-hour session whose random ID lives
+ * only in the page and is sent with every request.
+ */
+
+var SESSION_TTL = 21600;   // seconds (CacheService maximum)
 
 function doGet(e) {
   var params = (e && e.parameter) || {};
-  var user;
-  try {
-    user = portalUser_();
-  } catch (err) {
-    return HtmlService.createHtmlOutput(
-      '<div style="font-family:Roboto,Arial;max-width:520px;margin:40px auto;line-height:1.5">' +
-      '<h2 style="color:#1F3864">Lead CRM</h2><p><b>Access denied.</b> Your Google account is not an active counsellor ' +
-      'in this CRM. Sign in with your work account, or ask a CRM administrator to add your email to Counsellor Master.</p></div>')
-      .setTitle('Lead CRM').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  var lead = str_(params.lead).substring(0, 40);
+  var email = '';
+  var how = '';
+  if (params.t) {
+    email = verifyIdentityToken_(String(params.t));
+    how = 'sign-in token';
+    if (!email) return simplePage_('Sign-in link expired', 'This sign-in link is invalid, expired or was already used. ' + signInLinkHtml_(lead));
+  } else {
+    try { email = Session.getActiveUser().getEmail() || ''; } catch (err) { /* blank for visitors */ }
+    how = 'Google session';
   }
-  logAccess_(user.email, ACCESS.PORTAL_OPENED, str_(params.lead), params.embed ? 'Embedded in spreadsheet sidebar' : '', 'Web app');
+  if (!email) {
+    if (!getIdentityUrl_()) return simplePage_('Lead CRM', 'Sign-in is not configured yet. Ask a CRM administrator to deploy the sign-in app (docs/SETUP.md).');
+    return simplePage_('Lead CRM', 'Please sign in to continue. ' + signInLinkHtml_(lead));
+  }
+  var user = accessFor_(email);
+  if (!user) {
+    logAccess_(email, ACCESS.DENIED, lead, 'Not an active counsellor or admin (' + how + ')', 'Web app');
+    return simplePage_('Access denied', 'The Google account <b>' + escHtml_(email) + '</b> is not an active counsellor or administrator in this CRM. ' +
+      'Ask a CRM administrator to add exactly this email to Counsellor Master, or sign in with a different Google account. ' + signInLinkHtml_(lead));
+  }
+  var sid = createPortalSession_(user.email);
+  logAccess_(user.email, ACCESS.PORTAL_OPENED, lead, 'Signed in via ' + how, 'Web app');
   var t = HtmlService.createTemplateFromFile('Portal');
   // Injected into a <script> block: escape "<" so a crafted ?lead= value cannot close the tag.
-  t.boot = JSON.stringify({ lead: str_(params.lead).substring(0, 40), embed: !!params.embed }).replace(/</g, '\\u003c');
+  t.boot = JSON.stringify({ lead: lead, sid: sid, signIn: signInUrl_('') }).replace(/</g, '\\u003c');
   return t.evaluate()
     .setTitle('Lead CRM - My Leads')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-/** The /exec URL of the deployed web app ('' if not deployed). */
+function escHtml_(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function simplePage_(title, html) {
+  return HtmlService.createHtmlOutput(
+    '<div style="font-family:Roboto,Arial;max-width:560px;margin:40px auto;padding:0 16px;line-height:1.55">' +
+    '<h2 style="color:#1F3864">' + escHtml_(title) + '</h2><p>' + html + '</p></div>')
+    .setTitle('Lead CRM').addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/** The /exec URL of the main (counsellor) web app ('' if not deployed). */
 function getWebAppUrl_() {
   var u = '';
   try { u = ScriptApp.getService().getUrl() || ''; } catch (e) { /* not deployed */ }
@@ -53,11 +91,52 @@ function getWebAppUrl_() {
   return u;
 }
 
+function getIdentityUrl_() {
+  return PropertiesService.getScriptProperties().getProperty(PROP.IDENTITY_URL) || '';
+}
+
+/** Link counsellors use: the sign-in app, which then sends them to the main app. */
+function signInUrl_(lead) {
+  var u = getIdentityUrl_();
+  if (!u) return '';
+  return u + (lead ? (u.indexOf('?') < 0 ? '?' : '&') + 'lead=' + encodeURIComponent(lead) : '');
+}
+
+function signInLinkHtml_(lead) {
+  var u = signInUrl_(lead);
+  return u ? '<br><br><a href="' + escHtml_(u) + '" target="_top" style="font-weight:bold">Sign in with Google</a>' : '';
+}
+
+/** Admin > Web app sign-in setup: creates the shared secret and stores both URLs. */
+function setupWebAppSignIn() {
+  requireAdmin_();
+  var ui = SpreadsheetApp.getUi();
+  var props = PropertiesService.getScriptProperties();
+  var secret = props.getProperty(PROP.IDENTITY_SECRET);
+  if (!secret) {
+    secret = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+    props.setProperty(PROP.IDENTITY_SECRET, secret);
+  }
+  var main = getWebAppUrl_();
+  var r = ui.prompt(CRM_TITLE,
+    'STEP A - in the separate sign-in project (identity-app), open Project Settings > Script properties and add:\n\n' +
+    '  IDENTITY_SECRET = ' + secret + '\n' +
+    '  MAIN_APP_URL = ' + (main || '(deploy this project as a web app first, then run this again)') + '\n\n' +
+    'STEP B - deploy the sign-in project (Execute as: User accessing the web app; Who has access: Anyone with a Google account) ' +
+    'and paste its /exec URL below.\n\nCurrent sign-in URL: ' + (getIdentityUrl_() || 'not set'), ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  var url = str_(r.getResponseText());
+  if (!url) return;
+  if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) { ui.alert(CRM_TITLE, 'That does not look like a web app /exec URL.', ui.ButtonSet.OK); return; }
+  props.setProperty(PROP.IDENTITY_URL, url);
+  toast_('Sign-in app URL saved. Counsellor link: ' + url);
+}
+
 /** Admin > Set counsellor web app URL (only needed if the URL cannot be detected automatically). */
 function setWebAppUrl() {
   requireAdmin_();
   var ui = SpreadsheetApp.getUi();
-  var r = ui.prompt(CRM_TITLE, 'Paste the web app URL (ends with /exec):\n\nCurrent: ' + (getWebAppUrl_() || 'not set'), ui.ButtonSet.OK_CANCEL);
+  var r = ui.prompt(CRM_TITLE, 'Paste the main web app URL (ends with /exec):\n\nCurrent: ' + (getWebAppUrl_() || 'not set'), ui.ButtonSet.OK_CANCEL);
   if (r.getSelectedButton() !== ui.Button.OK) return;
   var url = str_(r.getResponseText());
   if (url && !/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) { ui.alert(CRM_TITLE, 'That does not look like a web app /exec URL.', ui.ButtonSet.OK); return; }
@@ -65,22 +144,89 @@ function setWebAppUrl() {
   toast_('Web app URL saved.');
 }
 
+/* ---------- Token verification and sessions ---------- */
+
+function bytesToString_(bytes) { return Utilities.newBlob(bytes).getDataAsString(); }
+
+/** Constant-time string comparison. */
+function safeEqual_(a, b) {
+  if (a.length !== b.length) return false;
+  var x = 0;
+  for (var i = 0; i < a.length; i++) x |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return x === 0;
+}
+
+/**
+ * Token = base64url(email|expiresMs|nonce) + '.' + base64url(HMAC_SHA256(payload, secret)).
+ * Returns the email when the signature is valid, the token is unexpired and not used before; else ''.
+ */
+function verifyIdentityToken_(token) {
+  try {
+    var secret = PropertiesService.getScriptProperties().getProperty(PROP.IDENTITY_SECRET);
+    if (!secret || token.length > 2000) return '';
+    var parts = token.split('.');
+    if (parts.length !== 2) return '';
+    var payload = bytesToString_(Utilities.base64DecodeWebSafe(parts[0]));
+    var expected = Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(payload, secret));
+    if (!safeEqual_(expected, parts[1])) return '';
+    var f = payload.split('|');
+    if (f.length !== 3 || !/@/.test(f[0])) return '';
+    if (!(Number(f[1]) > Date.now())) return '';
+    var cache = CacheService.getScriptCache();
+    if (cache.get('NONCE_' + f[2])) return '';          // single use
+    cache.put('NONCE_' + f[2], '1', 900);
+    return f[0];
+  } catch (e) {
+    return '';
+  }
+}
+
+function createPortalSession_(email) {
+  var sid = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '').toLowerCase();
+  CacheService.getScriptCache().put('PS_' + sid, email, SESSION_TTL);
+  return sid;
+}
+
+function sessionEmail_(sid) {
+  sid = str_(sid);
+  if (!/^[a-f0-9]{64}$/.test(sid)) return '';
+  var cache = CacheService.getScriptCache();
+  var email = cache.get('PS_' + sid) || '';
+  if (email) cache.put('PS_' + sid, email, SESSION_TTL);   // sliding expiry
+  return email;
+}
+
 /* ================================================================== */
 /* Identity and access log                                             */
 /* ================================================================== */
 
-/** Signed-in web app user, or throws ACCESS_DENIED (and logs the attempt). */
-function portalUser_() {
-  var email = '';
-  try { email = Session.getActiveUser().getEmail() || ''; } catch (e) { /* not available */ }
+/**
+ * The ONLY access rule: an Active counsellor in Counsellor Master, or an email in Lists & Settings >
+ * Admin Emails. Any Google account / email provider is fine. Returns the user or null.
+ */
+function accessFor_(email) {
+  if (!email) return null;
+  clearMemo_('counsellors');
+  clearMemo_('settings');
+  clearMemo_('settingsMap');
   var c = counsellorForEmail_(email);
-  var admin = isAdmin_(email);
-  if (!email || (!(c && c.active) && !admin)) {
-    logAccess_(email, ACCESS.DENIED, '', email ? 'Not an active counsellor or admin' : 'Email not available to the script', 'Web app');
+  var activeC = c && c.active ? c : null;
+  var admin = isListedAdmin_(email);
+  if (!activeC && !admin) return null;
+  var name = activeC ? activeC.name : '';
+  return { email: email.toLowerCase(), name: name, admin: admin, label: name || email };
+}
+
+/** Signed-in web app user for an API call, or throws (and logs). sid = session ID from the page. */
+function portalUser_(sid) {
+  var email = sessionEmail_(sid);
+  if (!email) throw new Error('SESSION_EXPIRED');
+  var u = accessFor_(email);
+  if (!u) {
+    logAccess_(email, ACCESS.DENIED, '', 'No longer an active counsellor or admin', 'Web app');
     throw new Error('ACCESS_DENIED');
   }
-  var name = c && c.active ? c.name : '';
-  return { email: email.toLowerCase(), name: name, admin: admin, label: name || email };
+  return u;
 }
 
 /** Appends one row to the Access Log (never throws). */
@@ -139,8 +285,8 @@ function portalValue_(v, type) {
 /* API called from Portal.html                                         */
 /* ================================================================== */
 
-function portalInit() {
-  var u = portalUser_();
+function portalInit(sid) {
+  var u = portalUser_(sid);
   var lists = getLists_();
   var settings = getSettings_();
   return {
@@ -157,8 +303,8 @@ function portalInit() {
 }
 
 /** Leads visible to the user. filter: 'due' | 'open' | 'all'; search: text in ID / name / mobile. */
-function portalListLeads(filter, search) {
-  var u = portalUser_();
+function portalListLeads(sid, filter, search) {
+  var u = portalUser_(sid);
   var sheet = getSheet_(SHEET.LEADS);
   var last = lastLeadRow_(sheet);
   var data = last >= 2 ? sheet.getRange(2, 1, last - 1, LEAD_COLS).getValues() : [];
@@ -210,8 +356,8 @@ function portalListLeads(filter, search) {
 }
 
 /** One lead with its allowed fields and recent history (ownership checked). */
-function portalGetLead(leadId) {
-  var u = portalUser_();
+function portalGetLead(sid, leadId) {
+  var u = portalUser_(sid);
   var sheet = getSheet_(SHEET.LEADS);
   var rowNum = findLeadRow_(sheet, leadId);
   if (!rowNum) throw new Error('Lead ' + leadId + ' was not found.');
@@ -234,8 +380,8 @@ function portalLeadPayload_(row) {
  * Saves edits to allowed fields. changes: {fieldKey: value}. Locked/system fields are rejected on the
  * server even if the browser sends them.
  */
-function portalSaveLead(leadId, changes) {
-  var u = portalUser_();
+function portalSaveLead(sid, leadId, changes) {
+  var u = portalUser_(sid);
   var actor = { email: u.email, name: u.name, label: u.label };
   var meta = {};
   portalFieldMeta_().forEach(function (f) { meta[f.key] = f; });
@@ -309,8 +455,8 @@ function portalSaveLead(leadId, changes) {
 }
 
 /** Logs a follow-up from the web app (counsellor = the signed-in user; own leads only). */
-function portalSubmitFollowUp(p) {
-  var u = portalUser_();
+function portalSubmitFollowUp(sid, p) {
+  var u = portalUser_(sid);
   var res = submitFollowUpAs_(p, { email: u.email, name: u.name, label: u.label }, {
     source: 'counsellor web app',
     forceCounsellor: u.name || null,
@@ -322,8 +468,8 @@ function portalSubmitFollowUp(p) {
 }
 
 /** Best-effort report of a copy action in the browser (can be bypassed; see docs/CONFIDENTIALITY.md). */
-function portalLogClientEvent(kind, leadId) {
-  var u = portalUser_();
+function portalLogClientEvent(sid, kind, leadId) {
+  var u = portalUser_(sid);
   var cache = CacheService.getDocumentCache();
   var key = 'CE_' + Utilities.base64Encode(u.email + '|' + kind + '|' + leadId).substring(0, 200);
   if (cache.get(key)) return false;

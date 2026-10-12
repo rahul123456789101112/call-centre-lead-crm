@@ -25,11 +25,11 @@ function getSelectedLeadId() {
 /** Everything the sidebar needs to render. Also registers the caller's identity mapping. */
 function getFollowUpContext() {
   var actor = registerCurrentUser_();
-  var webAppUrl = getWebAppUrl_();
+  var webAppUrl = getWebAppUrl_() && getIdentityUrl_();
   if (strictMode_() && !isAdmin_(actor.email)) {
-    // Counsellors: the sidebar embeds the web app, which runs as the owner and can write locked columns.
+    // Counsellors: the sidebar links to the web app (via its sign-in app); it runs as the owner and can write locked columns.
     var lead = getSelectedLeadId();
-    return { useWebApp: true, webAppUrl: webAppUrl ? webAppUrl + '?embed=1' + (lead ? '&lead=' + encodeURIComponent(lead) : '') : '', actor: actor };
+    return { useWebApp: true, webAppUrl: webAppUrl ? signInUrl_(lead) : '', actor: actor };
   }
   var settings = getSettings_();
   var lists = getLists_();

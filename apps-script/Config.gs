@@ -161,7 +161,8 @@ var NAMED = {
 var PROP = {
   LEAD_SEQ: 'LEAD_SEQ', ACT_SEQ: 'ACT_SEQ', EDIT_MODE: 'EDIT_MODE', USER_KEY_PREFIX: 'UK_',
   DASH_LAYOUT: 'DASH_LAYOUT', LAST_SUBSTAGE_REFRESH: 'LAST_SUBSTAGE_REFRESH',
-  SUBSTAGE_MAP: 'SUBSTAGE_MAP_V1', WEB_APP_URL: 'WEB_APP_URL', DASH_CHART_COUNTS: 'DASH_CHART_COUNTS'
+  SUBSTAGE_MAP: 'SUBSTAGE_MAP_V1', WEB_APP_URL: 'WEB_APP_URL', DASH_CHART_COUNTS: 'DASH_CHART_COUNTS',
+  IDENTITY_URL: 'IDENTITY_URL', IDENTITY_SECRET: 'IDENTITY_SECRET'
 };
 
 /* ================================================================== */
@@ -466,10 +467,28 @@ function isActiveCounsellor_(name) {
   return getCounsellors_().some(function (c) { return c.active && same_(c.name, name); });
 }
 
+/**
+ * Canonical form of an email for comparisons. Lower-case; for Gmail addresses dots and "+tags" in the
+ * local part are ignored and googlemail.com = gmail.com (Google treats them as the same account).
+ * Other providers are compared exactly (lower-case), because their rules differ.
+ */
+function normEmail_(email) {
+  var e = str_(email).toLowerCase();
+  var at = e.lastIndexOf('@');
+  if (at < 1) return e;
+  var local = e.substring(0, at), domain = e.substring(at + 1);
+  if (domain === 'gmail.com' || domain === 'googlemail.com') {
+    local = local.split('+')[0].replace(/\./g, '');
+    domain = 'gmail.com';
+  }
+  return local + '@' + domain;
+}
+
+function sameEmail_(a, b) { return !!a && !!b && normEmail_(a) === normEmail_(b); }
+
 function counsellorForEmail_(email) {
   if (!email) return null;
-  var e = email.toLowerCase();
-  return getCounsellors_().filter(function (c) { return c.email === e; })[0] || null;
+  return getCounsellors_().filter(function (c) { return sameEmail_(c.email, email); })[0] || null;
 }
 
 /* ================================================================== */
@@ -484,24 +503,58 @@ function counsellorForEmail_(email) {
  */
 function getActor_(e) {
   var email = '';
-  try { if (e && e.user && e.user.getEmail) email = e.user.getEmail() || ''; } catch (err) { /* not available */ }
-  if (!email) { try { email = Session.getActiveUser().getEmail() || ''; } catch (err) { /* not available */ } }
   var installable = !!(e && e.triggerUid);
-  if (!email && !installable) {
-    // Temporary keys are only trusted when the code runs as the editing user (simple trigger / sidebar).
-    try {
-      var key = Session.getTemporaryActiveUserKey();
-      if (key) email = PropertiesService.getScriptProperties().getProperty(PROP.USER_KEY_PREFIX + key) || '';
-    } catch (err) { /* not available */ }
+  try { if (e && e.user && e.user.getEmail) email = e.user.getEmail() || ''; } catch (err) { /* not available */ }
+  if (!email && !installable) { try { email = Session.getActiveUser().getEmail() || ''; } catch (err) { /* not available */ } }
+  if (!email) {
+    // Personal Google accounts: Google does not reveal the editor's email to a trigger owned by someone
+    // else. The simple onEdit (running AS the editor) stores the editor's temporary key for this edit;
+    // the key maps to an email the user registered by authorising the script (registerCurrentUser_).
+    var key = '';
+    if (installable && e.range) key = waitForEditorKey_(e);
+    else { try { key = Session.getTemporaryActiveUserKey(); } catch (err) { /* not available */ } }
+    if (key) email = PropertiesService.getScriptProperties().getProperty(PROP.USER_KEY_PREFIX + key) || '';
   }
   var c = counsellorForEmail_(email);
   var name = c ? c.name : '';
   return { email: email, name: name, label: name || email || 'Unidentified user' };
 }
 
+/* ---------- Editor key hand-off between the two edit triggers ---------- */
+
+function editHandoffKey_(range, value) {
+  var v = value === undefined ? '' : String(value);
+  var digest = Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, v, Utilities.Charset.UTF_8));
+  return 'EDK_' + range.getSheet().getSheetId() + '_' + range.getA1Notation() + '_' + digest;
+}
+
+/** Simple onEdit (runs as the editor): remember who made this edit for the installable trigger. */
+function rememberEditor_(e) {
+  try {
+    var key = Session.getTemporaryActiveUserKey();
+    if (key) CacheService.getScriptCache().put(editHandoffKey_(e.range, e.value), key, 120);
+  } catch (err) { /* not available */ }
+}
+
+/** Installable onEdit (runs as the owner): wait up to ~3 s for the simple trigger's hand-off. */
+function waitForEditorKey_(e) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var k = editHandoffKey_(e.range, e.value);
+    for (var i = 0; i < 12; i++) {
+      var v = cache.get(k);
+      if (v) return v;
+      Utilities.sleep(250);
+    }
+  } catch (err) { /* ignore */ }
+  return '';
+}
+
 /**
- * Called from authorised contexts (sidebar, menu). Remembers the user's temporary key so later
- * simple-trigger edits by the same user can be attributed even on consumer (gmail.com) accounts.
+ * Called from authorised contexts (sidebar, every admin menu action). In these contexts the user has
+ * authorised the script themselves, so Google returns their email even for personal accounts.
+ * Stores temporaryKey -> email so later sheet edits by the same person can be attributed.
+ * Google rotates the temporary key every 30 days; any menu use re-registers it.
  */
 function registerCurrentUser_() {
   var email = '';
@@ -516,25 +569,31 @@ function registerCurrentUser_() {
   return { email: email, name: c ? c.name : '', label: (c && c.name) || email || 'Unidentified user' };
 }
 
+/** Admin Emails setting plus the spreadsheet owner (used for sheet protection and the Admin menu). */
 function getAdminEmails_() {
   var list = getSettings_().adminEmails.slice();
   try {
     var owner = ss_().getOwner();
-    if (owner && owner.getEmail() && list.indexOf(owner.getEmail().toLowerCase()) < 0) list.push(owner.getEmail().toLowerCase());
+    if (owner && owner.getEmail() && !list.some(function (a) { return sameEmail_(a, owner.getEmail()); })) list.push(owner.getEmail().toLowerCase());
   } catch (e) { /* shared drive files have no owner */ }
   return list;
 }
 
 function isAdmin_(email) {
   if (!email) return false;
-  return getAdminEmails_().indexOf(email.toLowerCase()) >= 0;
+  return getAdminEmails_().some(function (a) { return sameEmail_(a, email); });
+}
+
+/** Listed in Lists & Settings > Admin Emails (the web app's admin rule: the list only). */
+function isListedAdmin_(email) {
+  return !!email && getSettings_().adminEmails.some(function (a) { return sameEmail_(a, email); });
 }
 
 /** Throws (and alerts) if the current user is not a CRM administrator. */
 function requireAdmin_() {
   var email = '';
   try { email = Session.getActiveUser().getEmail(); } catch (e) { /* ignore */ }
-  if (isAdmin_(email)) return email;
+  if (isAdmin_(email)) { registerCurrentUser_(); return email; }
   var msg = 'This action is restricted to CRM administrators (Lists & Settings > "' + SET.ADMINS + '").' +
     (email ? '' : ' Your email address is not visible to the script.');
   notify_(msg);   // non-blocking: ui.alert would pause the script until someone clicks OK

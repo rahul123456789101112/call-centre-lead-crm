@@ -115,8 +115,8 @@ Counsellor Master columns:
 
 **Add a counsellor:**
 1. Type the name in the next empty row. ID, `Active` and today's date are filled in automatically.
-2. Add their **@companyname.com email**. This is also their web-app login.
-3. Send them the web app link (**Lead CRM → Open counsellor web app**). Do **not** share the spreadsheet with them.
+2. Add the email of **the Google account they will sign in with**. Any provider is fine (Gmail, company email, others), as long as it is a Google account. For Gmail, dots and `+tags` don't matter.
+3. Send them the counsellor link (**Lead CRM → Open counsellor web app**). Do **not** share the spreadsheet with them.
 
 The Assigned Counsellor dropdown updates immediately; no formula change is needed.
 
@@ -163,7 +163,7 @@ Every row gets its own audit entry (the old owner comes from the hidden snapshot
 | Require Next Follow-Up For Open Leads / Require Remarks On Follow-Up | Mandatory fields in the follow-up form |
 | Max Backdate Days For Activities | How far back a caller can date an activity |
 | Email Reminders Enabled / Reminder Hour | Change through the Admin menu, which also manages the trigger |
-| Admin Emails | Administrators (comma separated). Then run *Reapply protections*. |
+| Admin Emails | Administrators (comma separated, any email provider). They may use the Admin menu and the web app (all leads). Then run *Reapply protections*. |
 
 **Counsellor-Locked Fields (AD).** One Lead Management field name per row. Counsellors cannot edit these columns.
 - In the spreadsheet: **strict** protection, light-grey header and cells.
@@ -204,7 +204,7 @@ In legacy simple mode (Admin menu) the same columns fall back to warning-only pr
 **Protected ranges are safeguards, not a security boundary.** Anyone with Editor or Viewer access can copy, download or print the whole file. That is why counsellors should use the web app, which only ever sends them their own leads. Also:
 - keep the owner account separate from day-to-day users;
 - use **File → Version history** to recover;
-- use the Workspace **Drive audit log** to see downloads and copies (CONFIDENTIALITY.md).
+- note that with a personal Gmail owner, **downloads and copies of the spreadsheet cannot be logged** (no Drive audit log). Keep the admin list small (CONFIDENTIALITY.md).
 
 Do not store passwords, ID numbers or other sensitive personal data in custom fields.
 
@@ -214,7 +214,9 @@ Do not store passwords, ID numbers or other sensitive personal data in custom fi
 
 - **Link:** **Lead CRM → Open counsellor web app**.
 - **Deploying / updating:** SETUP.md §2. After code changes, deploy a **New version**.
-- **Who can get in:** Active counsellors in Counsellor Master (by email) and CRM admins. Admins see all leads; counsellors only see leads whose Assigned Counsellor is their name.
+- **Who can get in (the only rule):** emails that are **Active** in Counsellor Master, or listed in **Admin Emails**. Any Google account and any email provider; no domain restriction. The spreadsheet owner gets in only if listed. Admins see all leads; counsellors only see leads whose Assigned Counsellor is their name.
+- **Sign-in:** counsellors use the counsellor link (the sign-in app). It proves their Google email to the web app with a signed, single-use token (SETUP.md §2 and §5).
+- **Sheet editors:** each person who edits the spreadsheet should run **Lead CRM → Identify me** once. Otherwise their edits show "Unidentified user", because Google does not reveal personal accounts' emails to the owner's trigger (SETUP.md §5).
 - **Reassigning a lead** moves it to the new counsellor's web app at their next refresh.
 - **Access Log sheet** (admins only), one row per event:
   - Portal Opened
