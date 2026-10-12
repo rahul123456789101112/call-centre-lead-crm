@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root { --navy:#1F3864; --blue:#2E75B6; --red:#C0392B; --green:#117A65; --muted:#5F6B76; --line:#D5D8DC; --bg:#F4F6F9; }
+    * { box-sizing: border-box; }
+    body { font-family: Roboto, Arial, sans-serif; font-size: 13px; color: #202124; margin: 0; padding: 12px; }
+    h2 { font-size: 15px; color: var(--navy); margin: 0 0 4px; }
+    .who { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+    .who.warn { color: var(--red); }
+    label { display: block; font-weight: 600; font-size: 12px; margin: 10px 0 3px; color: #3C4043; }
+    label .req { color: var(--red); }
+    input, select, textarea { width: 100%; padding: 6px 7px; border: 1px solid var(--line); border-radius: 4px; font: inherit; background: #fff; }
+    input:focus, select:focus, textarea:focus { outline: 2px solid #AED6F1; border-color: var(--blue); }
+    textarea { min-height: 70px; resize: vertical; }
+    .row { display: flex; gap: 6px; }
+    .row > * { flex: 1; }
+    button { padding: 7px 12px; border: 1px solid var(--line); border-radius: 4px; background: #fff; cursor: pointer; font: inherit; }
+    button.primary { background: var(--navy); border-color: var(--navy); color: #fff; font-weight: 600; width: 100%; margin-top: 14px; padding: 9px; }
+    button:disabled { opacity: .55; cursor: wait; }
+    .card { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; margin-top: 10px; }
+    .card .title { font-weight: 700; color: var(--navy); }
+    .kv { display: grid; grid-template-columns: 95px 1fr; gap: 2px 6px; margin-top: 6px; font-size: 12px; }
+    .kv span:nth-child(odd) { color: var(--muted); }
+    .msg { margin-top: 10px; padding: 8px 10px; border-radius: 4px; font-size: 12px; display: none; }
+    .msg.ok { display: block; background: #D5F5E3; color: #145A32; }
+    .msg.err { display: block; background: #FADBD8; color: #78281F; }
+    .msg.info { display: block; background: #EBF5FB; color: #1B4F72; }
+    .hist { margin-top: 8px; font-size: 11px; }
+    .hist div { border-top: 1px dashed var(--line); padding: 4px 0; }
+    .hist .t { color: var(--muted); }
+    .pick { margin-top: 6px; }
+    .pick a { display: block; color: var(--blue); cursor: pointer; padding: 2px 0; }
+    .hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    fieldset { border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px 10px; margin: 12px 0 0; }
+    legend { font-size: 11px; color: var(--muted); padding: 0 4px; }
+  </style>
+</head>
+<body>
+  <h2>Log Follow-Up</h2>
+  <div id="who" class="who">Loading...</div>
+
+  <label for="leadQuery">Lead ID or mobile number <span class="req">*</span></label>
+  <div class="row">
+    <input id="leadQuery" placeholder="e.g. LD-000123">
+    <button type="button" id="findBtn" style="flex:0 0 auto">Find</button>
+  </div>
+  <button type="button" id="selBtn" style="margin-top:6px;width:100%">Use selected row in Lead Management</button>
+  <div id="leadMsg" class="msg"></div>
+  <div id="leadCard" class="card" style="display:none"></div>
+
+  <form id="form" autocomplete="off" style="display:none">
+    <label for="counsellor">Counsellor <span class="req">*</span></label>
+    <select id="counsellor" required></select>
+    <div class="hint" id="counsellorHint"></div>
+
+    <div class="row">
+      <div>
+        <label for="activityType">Activity type <span class="req">*</span></label>
+        <select id="activityType" required></select>
+      </div>
+      <div>
+        <label for="outcome">Contact outcome <span class="req">*</span></label>
+        <select id="outcome" required></select>
+      </div>
+    </div>
+
+    <label for="activityTime">Activity date &amp; time</label>
+    <input type="datetime-local" id="activityTime">
+    <div class="hint">Leave as is for "now". Past dates are limited by the administrator.</div>
+
+    <fieldset>
+      <legend>Update lead (optional)</legend>
+      <div class="row">
+        <div>
+          <label for="stage">Lead stage</label>
+          <select id="stage"></select>
+        </div>
+        <div>
+          <label for="substage">Substage</label>
+          <select id="substage"></select>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="status">Lead status</label>
+          <select id="status"></select>
+        </div>
+        <div>
+          <label for="priority">Priority</label>
+          <select id="priority"></select>
+        </div>
+      </div>
+    </fieldset>
+
+    <label for="nextFollowUp">Next follow-up date <span class="req" id="nextReq">*</span></label>
+    <input type="date" id="nextFollowUp">
+
+    <label for="remarks">Remarks <span class="req" id="remarksReq">*</span></label>
+    <textarea id="remarks" maxlength="2000" placeholder="What happened on this call / message?"></textarea>
+
+    <button type="submit" class="primary" id="saveBtn">Save follow-up</button>
+  </form>
+  <div id="formMsg" class="msg"></div>
+
+<script>
+  var ctx = null;
+  var lead = null;
+  var submissionId = newId();
+  var busy = false;
+
+  function $(id) { return document.getElementById(id); }
+  function newId() { return 'S' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function show(id, cls, text) { var el = $(id); el.className = 'msg ' + cls; el.innerHTML = text; }
+  function hide(id) { $(id).className = 'msg'; $(id).innerHTML = ''; }
+  function fill(sel, values, blankLabel, selected) {
+    var html = blankLabel !== null ? '<option value="">' + esc(blankLabel) + '</option>' : '';
+    values.forEach(function (v) {
+      html += '<option value="' + esc(v) + '"' + (v === selected ? ' selected' : '') + '>' + esc(v) + '</option>';
+    });
+    sel.innerHTML = html;
+  }
+  function stageSubs(name) {
+    var s = (ctx.stages || []).filter(function (x) { return x.name === name; })[0];
+    return s ? s.subs : [];
+  }
+  function fail(err) {
+    busy = false;
+    $('saveBtn').disabled = false;
+    show('formMsg', 'err', 'Error: ' + esc(err && err.message ? err.message : err) + '<br>Your entry was not lost - press Save again.');
+  }
+
+  function init(c) {
+    ctx = c;
+    var who = $('who');
+    if (c.actor.name) {
+      who.textContent = 'Signed in as ' + c.actor.name + ' (' + c.actor.email + ')';
+    } else if (c.actor.email) {
+      who.textContent = 'Signed in as ' + c.actor.email + ' - not mapped to a counsellor (ask an admin to add this email in Counsellor Master). Select your name below.';
+      who.className = 'who warn';
+    } else {
+      who.textContent = 'Your Google account email is not visible to the script. Select your name below.';
+      who.className = 'who warn';
+    }
+    fill($('counsellor'), c.counsellors, '- select -', c.actor.name || '');
+    fill($('activityType'), c.activityTypes.map(function (a) { return a.type; }), '- select -', '');
+    fill($('outcome'), c.outcomes, '- select -', '');
+    fill($('stage'), c.stages.map(function (s) { return s.name; }), null, '');
+    fill($('status'), c.statuses, null, '');
+    fill($('priority'), c.priorities, '(no change)', '');
+    $('remarksReq').style.display = c.rules.requireRemarks ? '' : 'none';
+    $('activityTime').value = c.nowLocal;
+    $('activityTime').dataset.touched = '';
+    $('nextFollowUp').min = c.today;
+    $('nextFollowUp').max = c.maxNextFu;
+    if (c.selectedLeadId) { $('leadQuery').value = c.selectedLeadId; findLead(); }
+  }
+
+  function findLead() {
+    var q = $('leadQuery').value.trim();
+    hide('leadMsg');
+    if (!q) { show('leadMsg', 'err', 'Enter a Lead ID or mobile number.'); return; }
+    show('leadMsg', 'info', 'Searching...');
+    google.script.run.withSuccessHandler(onLead).withFailureHandler(function (e) {
+      show('leadMsg', 'err', esc(e && e.message ? e.message : e));
+    }).getLeadForSidebar(q);
+  }
+
+  function onLead(res) {
+    hide('leadMsg');
+    if (!res.found) {
+      lead = null;
+      $('leadCard').style.display = 'none';
+      $('form').style.display = 'none';
+      var html = esc(res.message);
+      if (res.matches) {
+        html += '<div class="pick">' + res.matches.map(function (m) {
+          return '<a data-id="' + esc(m.id) + '">' + esc(m.id + ' - ' + m.name + (m.owner ? ' (' + m.owner + ')' : '')) + '</a>';
+        }).join('') + '</div>';
+      }
+      show('leadMsg', 'err', html);
+      Array.prototype.forEach.call(document.querySelectorAll('.pick a'), function (a) {
+        a.onclick = function () { $('leadQuery').value = a.getAttribute('data-id'); findLead(); };
+      });
+      return;
+    }
+    renderLead(res.lead);
+  }
+
+  function renderLead(l) {
+    lead = l;
+    $('leadQuery').value = l.id;
+    var hist = (l.recent || []).map(function (h) {
+      return '<div><span class="t">' + esc(h.time) + ' - ' + esc(h.type) + (h.outcome ? ' / ' + esc(h.outcome) : '') +
+        ' - ' + esc(h.counsellor) + '</span><br>' + esc(h.remarks) + '</div>';
+    }).join('');
+    $('leadCard').innerHTML = '<div class="title">' + esc(l.id) + ' - ' + esc(l.name || '(no name)') + '</div>' +
+      '<div class="kv"><span>Mobile</span><span>' + esc(l.mobile) + '</span>' +
+      '<span>Counsellor</span><span>' + esc(l.owner || 'Unassigned') + '</span>' +
+      '<span>Stage</span><span>' + esc(l.stage) + (l.substage ? ' / ' + esc(l.substage) : '') + '</span>' +
+      '<span>Status</span><span>' + esc(l.status) + '</span>' +
+      '<span>Next follow-up</span><span>' + esc(l.nextFollowUp || '-') + '</span>' +
+      '<span>Follow-ups</span><span>' + esc(l.followUpCount) + '</span>' +
+      '<span>Last activity</span><span>' + esc(l.lastActivity || '-') + (l.lastUpdatedBy ? ' by ' + esc(l.lastUpdatedBy) : '') + '</span></div>' +
+      (hist ? '<div class="hist"><b>Recent activity</b>' + hist + '</div>' : '');
+    $('leadCard').style.display = 'block';
+    $('form').style.display = 'block';
+
+    var stageNames = ctx.stages.map(function (s) { return s.name; });
+    var stages = stageNames.slice();
+    if (l.stage && stages.indexOf(l.stage) < 0) stages.unshift(l.stage);
+    fill($('stage'), stages, l.stage ? null : '- select -', l.stage);
+    fillSubstages(l.substage);
+    var statuses = ctx.statuses.slice();
+    if (l.status && statuses.indexOf(l.status) < 0) statuses.unshift(l.status);
+    fill($('status'), statuses, l.status ? null : '- select -', l.status);
+    $('priority').value = '';
+    if (!$('counsellor').value && l.owner && ctx.counsellors.indexOf(l.owner) >= 0) $('counsellor').value = l.owner;
+    $('nextFollowUp').value = '';
+    updateNextRequired();
+  }
+
+  function fillSubstages(selected) {
+    var subs = stageSubs($('stage').value);
+    var list = subs.slice();
+    if (selected && list.indexOf(selected) < 0 && lead && $('stage').value === lead.stage) list.unshift(selected);
+    fill($('substage'), list, subs.length ? '- select -' : '(none for this stage)', selected || '');
+    $('substage').disabled = !subs.length && !selected;
+  }
+
+  function updateNextRequired() {
+    var closed = ctx.closedStatuses.indexOf($('status').value) >= 0;
+    var required = ctx.rules.requireNextFu && !closed;
+    $('nextReq').style.display = required ? '' : 'none';
+    return required;
+  }
+
+  function validate() {
+    var errs = [];
+    if (!lead) errs.push('Find a lead first.');
+    if (!$('counsellor').value) errs.push('Select the counsellor.');
+    if (!$('activityType').value) errs.push('Select the activity type.');
+    if (!$('outcome').value) errs.push('Select the contact outcome.');
+    if (ctx.rules.requireRemarks && !$('remarks').value.trim()) errs.push('Enter remarks.');
+    if (stageSubs($('stage').value).length && !$('substage').value) errs.push('Select a substage for the chosen stage.');
+    var next = $('nextFollowUp').value;
+    if (updateNextRequired() && !next) errs.push('Enter the next follow-up date (required while the lead is open).');
+    if (next && next < ctx.today) errs.push('Next follow-up date cannot be in the past.');
+    return errs;
+  }
+
+  function submit(ev) {
+    ev.preventDefault();
+    if (busy) return;
+    hide('formMsg');
+    var errs = validate();
+    if (errs.length) { show('formMsg', 'err', errs.map(esc).join('<br>')); return; }
+    busy = true;
+    $('saveBtn').disabled = true;
+    show('formMsg', 'info', 'Saving...');
+    var payload = {
+      submissionId: submissionId,
+      leadId: lead.id,
+      counsellor: $('counsellor').value,
+      activityType: $('activityType').value,
+      outcome: $('outcome').value,
+      // Untouched = "now" on the server (the pre-filled value may be stale if the sidebar stayed open).
+      activityTime: $('activityTime').dataset.touched ? $('activityTime').value : '',
+      stage: $('stage').value,
+      substage: $('substage').value,
+      status: $('status').value,
+      priority: $('priority').value,
+      nextFollowUp: $('nextFollowUp').value,
+      remarks: $('remarks').value.trim()
+    };
+    google.script.run.withSuccessHandler(onSaved).withFailureHandler(fail).submitFollowUp(payload);
+  }
+
+  function onSaved(res) {
+    busy = false;
+    $('saveBtn').disabled = false;
+    if (!res.ok) {
+      show('formMsg', 'err', (res.errors || ['Not saved.']).map(esc).join('<br>'));
+      if (res.duplicate) submissionId = newId();
+      return;
+    }
+    submissionId = newId();
+    show('formMsg', 'ok', 'Saved as ' + esc(res.activityId) + '.' +
+      (res.messages && res.messages.length ? '<br>' + res.messages.map(esc).join('<br>') : ''));
+    $('remarks').value = '';
+    $('outcome').value = '';
+    $('activityType').value = '';
+    $('activityTime').dataset.touched = '';
+    renderLead(res.lead);
+  }
+
+  $('findBtn').onclick = findLead;
+  $('leadQuery').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); findLead(); } };
+  $('selBtn').onclick = function () {
+    google.script.run.withSuccessHandler(function (id) {
+      if (!id) { show('leadMsg', 'err', 'Select a lead row on the Lead Management sheet first.'); return; }
+      $('leadQuery').value = id; findLead();
+    }).getSelectedLeadId();
+  };
+  $('activityTime').oninput = function () { this.dataset.touched = '1'; };
+  $('stage').onchange = function () { fillSubstages(''); };
+  $('status').onchange = updateNextRequired;
+  $('form').onsubmit = submit;
+
+  google.script.run.withSuccessHandler(init).withFailureHandler(function (e) {
+    $('who').textContent = 'Could not load: ' + (e && e.message ? e.message : e);
+    $('who').className = 'who warn';
+  }).getFollowUpContext();
+</script>
+</body>
+</html>
