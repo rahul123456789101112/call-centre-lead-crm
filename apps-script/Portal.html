@@ -76,15 +76,14 @@
 
       <h2>Log a follow-up</h2>
       <div class="row">
-        <div class="f" id="fuCnsWrap" style="display:none"><label>Counsellor *</label><select id="fuCns"></select></div>
-        <div class="f"><label>Activity type *</label><select id="fuType"></select></div>
-        <div class="f"><label>Contact outcome *</label><select id="fuOutcome"></select></div>
+        <div class="f"><label>Outcome *</label><select id="fuOutcome"></select></div>
+        <div class="f"><label>Stage *</label><select id="fuStage"></select></div>
+        <div class="f"><label>Substage <span id="subReq">*</span></label><select id="fuSub"></select></div>
       </div>
       <div class="row" style="margin-top:6px">
         <div class="f"><label>Next follow-up date <span id="nextReq">*</span></label><input type="date" id="fuNext"></div>
-        <div class="f"><label>Activity date &amp; time (leave for now)</label><input type="datetime-local" id="fuTime"></div>
       </div>
-      <div class="f" style="margin-top:6px"><label>Remarks <span id="remReq">*</span></label><textarea id="fuRemarks" maxlength="2000"></textarea></div>
+      <div class="f" style="margin-top:6px"><label>Remarks <span id="remReq">*</span></label><textarea id="fuRemarks" maxlength="500"></textarea></div>
       <div style="margin-top:10px"><button class="btn" id="fuBtn">Save follow-up</button></div>
       <div id="fuMsg" class="msg"></div>
 
@@ -120,10 +119,9 @@
   function start(c) {
     ctx = c;
     $('who').textContent = (c.user.name || c.user.email) + (c.user.admin ? ' (administrator - all leads)' : '');
-    $('fuType').innerHTML = opts(c.activityTypes.map(function (a) { return a.type; }), '', '- select -');
     $('fuOutcome').innerHTML = opts(c.outcomes, '', '- select -');
-    if (!c.user.name) { $('fuCnsWrap').style.display = ''; $('fuCns').innerHTML = opts(c.counsellors, '', '- select -'); }
     $('fuNext').min = c.today; $('fuNext').max = c.maxNextFu;
+    $('fuRemarks').maxLength = c.rules.maxRemarks;
     $('remReq').style.display = c.rules.requireRemarks ? '' : 'none';
     if (BOOT.lead) openLead(BOOT.lead); else loadList();
   }
@@ -200,21 +198,31 @@
     if ($('f_STAGE') && $('f_SUBSTAGE')) {
       $('f_STAGE').onchange = function () {
         $('f_SUBSTAGE').innerHTML = opts(fieldOptions({ key: 'SUBSTAGE' }), '', '');   // stage changed: substage cleared
-        updateNextReq();
       };
     }
-    if ($('f_STATUS')) $('f_STATUS').onchange = updateNextReq;
     $('hist').innerHTML = (l.recent || []).map(function (h) {
       return '<div><span class="m">' + esc(h.time) + ' - ' + esc(h.type) + (h.outcome ? ' / ' + esc(h.outcome) : '') + ' - ' + esc(h.counsellor) +
         '</span><br>' + esc(h.remarks) + '</div>';
     }).join('') || '<div class="note">No activity yet.</div>';
-    $('fuTime').value = ''; $('fuTime').dataset.touched = '';
+    var stages = ctx.stages.map(function (s) { return s.name; });
+    if (v.STAGE && stages.indexOf(v.STAGE) < 0) stages.unshift(v.STAGE);
+    $('fuStage').innerHTML = opts(stages, v.STAGE, v.STAGE ? null : '- select -');
+    fuSubs(v.SUBSTAGE);
     updateNextReq();
   }
 
-  function currentStatus() { return $('f_STATUS') ? $('f_STATUS').value : lead.values.STATUS; }
+  function fuSubs(selected) {
+    var st = ctx.stages.filter(function (s) { return s.name === $('fuStage').value; })[0];
+    var subs = st ? st.subs.slice() : [];
+    $('fuSub').innerHTML = opts(subs, subs.indexOf(selected) >= 0 ? selected : '', subs.length ? '- select -' : '(none for this stage)');
+    $('fuSub').disabled = !subs.length;
+    $('subReq').style.display = subs.length && ctx.rules.requireSubstage ? '' : 'none';
+  }
+
   function updateNextReq() {
-    var req = ctx.rules.requireNextFu && ctx.closedStatuses.indexOf(currentStatus()) < 0;
+    var closing = ctx.closingStages.indexOf($('fuStage').value) >= 0 ||
+      (ctx.closedStatuses.indexOf(lead.values.STATUS) >= 0 && $('fuStage').value === lead.values.STAGE);
+    var req = ctx.rules.requireNextFu && !closing;
     $('nextReq').style.display = req ? '' : 'none';
     return req;
   }
@@ -240,11 +248,12 @@
   function saveFollowUp() {
     if (busy) return;
     var errs = [];
-    if (!ctx.user.name && !$('fuCns').value) errs.push('Select the counsellor.');
-    if (!$('fuType').value) errs.push('Select the activity type.');
-    if (!$('fuOutcome').value) errs.push('Select the contact outcome.');
-    if (ctx.rules.requireRemarks && !$('fuRemarks').value.trim()) errs.push('Enter remarks.');
-    if (updateNextReq() && !$('fuNext').value) errs.push('Enter the next follow-up date (required while the lead is open).');
+    if (!$('fuOutcome').value) errs.push('Choose the outcome of the call.');
+    if (!$('fuStage').value) errs.push('Choose the stage.');
+    if (!$('fuSub').disabled && ctx.rules.requireSubstage && !$('fuSub').value) errs.push('Choose a substage.');
+    if (ctx.rules.requireRemarks && !$('fuRemarks').value.trim()) errs.push('Write a short remark.');
+    if (updateNextReq() && !$('fuNext').value) errs.push('Choose the next follow-up date.');
+    if ($('fuNext').value && $('fuNext').value < ctx.today) errs.push('Next follow-up date cannot be in the past.');
     if (errs.length) { msg('fuMsg', 'err', errs.map(esc).join('<br>')); return; }
     busy = true; enable(false); msg('fuMsg', 'info', 'Saving...');
     run().withSuccessHandler(function (res) {
@@ -252,13 +261,11 @@
       if (!res.ok) { msg('fuMsg', 'err', (res.errors || ['Not saved.']).map(esc).join('<br>')); if (res.duplicate) subId = newId(); return; }
       subId = newId();
       msg('fuMsg', 'ok', 'Saved as ' + esc(res.activityId) + '.');
-      $('fuRemarks').value = ''; $('fuOutcome').value = ''; $('fuType').value = ''; $('fuNext').value = '';
+      $('fuRemarks').value = ''; $('fuOutcome').value = ''; $('fuNext').value = '';
       openLead(lead.id);
     }).withFailureHandler(fail('fuMsg')).portalSubmitFollowUp(BOOT.sid, {
-      submissionId: subId, leadId: lead.id, counsellor: ctx.user.name || $('fuCns').value,
-      activityType: $('fuType').value, outcome: $('fuOutcome').value,
-      activityTime: $('fuTime').dataset.touched ? $('fuTime').value : '',
-      stage: lead.values.STAGE || '', substage: lead.values.SUBSTAGE || '', status: '',
+      submissionId: subId, leadId: lead.id, outcome: $('fuOutcome').value,
+      stage: $('fuStage').value, substage: $('fuSub').disabled ? '' : $('fuSub').value,
       nextFollowUp: $('fuNext').value, remarks: $('fuRemarks').value.trim()
     });
   }
@@ -282,7 +289,7 @@
   $('backBtn').onclick = function () { $('leadView').style.display = 'none'; $('listView').style.display = ''; BOOT.lead = ''; loadList(); };
   $('saveBtn').onclick = saveLead;
   $('fuBtn').onclick = saveFollowUp;
-  $('fuTime').oninput = function () { this.dataset.touched = '1'; };
+  $('fuStage').onchange = function () { fuSubs(''); updateNextReq(); };
 
   google.script.run.withSuccessHandler(start).withFailureHandler(function (e) {
     $('who').innerHTML = errText(e);
