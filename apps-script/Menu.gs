@@ -19,6 +19,8 @@ function onOpen(e) {
       .addSeparator()
       .addItem('Clear view filters', 'viewClear'))
     .addItem('Refresh Dashboard', 'refreshDashboard')
+    .addItem('Add custom field...', 'addCustomField')
+    .addItem('Remove custom field...', 'removeCustomField')
     .addItem('Refresh substage dropdowns', 'refreshAllSubstageValidations')
     .addItem('Identify me', 'identifyMe')
     .addSeparator()
@@ -75,10 +77,10 @@ function leadFilter_() {
 }
 
 function formulaCriteria_(formula) {
-  return SpreadsheetApp.newFilterCriteria().whenFormulaSatisfied(formula).build();
+  return SpreadsheetApp.newFilterCriteria().whenFormulaSatisfied(lcf_(formula)).build();
 }
 
-var OPEN_FILTER_FORMULA = '=AND($AB2<>"Converted",$AB2<>"Lost",$AB2<>"Duplicate")';
+var OPEN_FILTER_FORMULA = '=AND(${STATUS}2<>"Converted",${STATUS}2<>"Lost",${STATUS}2<>"Duplicate")';
 
 function viewMyDueFollowUps() {
   var actor = registerCurrentUser_();
@@ -89,21 +91,21 @@ function viewMyDueFollowUps() {
   }
   var f = leadFilter_();
   f.setColumnFilterCriteria(LC.OWNER, SpreadsheetApp.newFilterCriteria().whenTextEqualTo(actor.name).build());
-  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER($J2),INT($J2)<=TODAY())'));
+  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)<=TODAY())'));
   f.setColumnFilterCriteria(LC.STATUS, formulaCriteria_(OPEN_FILTER_FORMULA));
   toast_('Showing follow-ups due today or overdue for ' + actor.name + '.');
 }
 
 function viewOverdue() {
   var f = leadFilter_();
-  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER($J2),$J2<TODAY())'));
+  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER(${NEXT_FU}2),${NEXT_FU}2<TODAY())'));
   f.setColumnFilterCriteria(LC.STATUS, formulaCriteria_(OPEN_FILTER_FORMULA));
   toast_('Showing overdue follow-ups (open leads).');
 }
 
 function viewDueToday() {
   var f = leadFilter_();
-  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER($J2),INT($J2)=TODAY())'));
+  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)=TODAY())'));
   f.setColumnFilterCriteria(LC.STATUS, formulaCriteria_(OPEN_FILTER_FORMULA));
   toast_('Showing follow-ups due today.');
 }
@@ -171,6 +173,9 @@ function runHealthCheck() {
   var leads = ss.getSheetByName(SHEET.LEADS);
   if (leads) {
     ok(str_(leads.getRange(1, LC.ID).getValue()) === 'Lead ID', 'Lead Management A1 = "Lead ID" (columns not moved)');
+    ok(same_(leads.getRange(1, LC.OWNER).getValue(), 'Assigned Counsellor'), 'Lead Management ' + colLetter_(LC.OWNER) + '1 = "Assigned Counsellor" (current column layout)');
+    var cfs = readCustomFields_().filter(function (f) { return f.active; });
+    ok(true, 'Active custom fields: ' + (cfs.map(function (f) { return f.name + ' (' + colLetter_(customCol_(f.slot)) + ')'; }).join(', ') || 'none'));
     ok(/^=/.test(leads.getRange(1, LC.FU_COUNT).getFormula()), 'Follow-Up Count header formula present (L1)');
     ok(/^=/.test(leads.getRange(1, LC.DQ_FLAGS).getFormula()), 'Data Quality header formula present (AH1)');
     var target = parseInt(PropertiesService.getDocumentProperties().getProperty(SETUP_ROWS_KEY), 10) || LEAD_DATA_ROWS;

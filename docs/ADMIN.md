@@ -6,28 +6,56 @@ Administrators are the emails listed in **Lists & Settings → Admin Emails** (p
 
 After changing the admin list, run **Lead CRM → Admin → Reapply protections**.
 
-> **Golden rule:** never insert, delete or move columns in Lead Management (A–AI) or Follow-Up Log (A–R). The script finds fields by position. Rename headers freely where this guide says so, and add extra information in the 10 custom fields.
+> **Golden rule:** never insert, delete or move columns in Lead Management (A–AI) or Follow-Up Log (A–R). The script finds fields by position. For extra information, use the 10 optional custom fields; they are switched on and off by hiding/showing fixed columns E–N.
 
 ---
 
-## Custom fields (Q–Z)
+## Custom fields (E–N)
 
-The ten columns *Custom Field 1 … Custom Field 10* are blank, free-text and editable by callers. The script never reads or changes them.
+Lead Management has **10 optional custom-field slots** in columns **E–N**, directly after Email ID:
 
-**To rename one** (for example Custom Field 1 → "Course Interested"):
-1. Click the header cell (Q1 … Z1) on **Lead Management**. You must be an admin, because the header row is protected.
-2. Type the new name and press Enter.
+| Slot | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Column | E | F | G | H | I | J | K | L | M | N |
 
-That is all:
-- existing data stays in place and stays editable;
-- the system needs no formula or script change;
-- re-running setup keeps your custom header names.
+Custom fields are blank, free-text and editable by callers. The script never reads, validates or reports on them; any data in them counts as lead data.
 
-**Optional extras:**
-- **A dropdown for a custom field:** select the column cells from row 2 down → **Data → Data validation** → *Dropdown (from a range)*. Point it at a new list you add in an empty column of Lists & Settings. Setup and repair keep custom-field validation only if you re-apply it, so note what you added.
+**After setup all 10 slots are inactive and their columns hidden.** The settings live in **Lists & Settings → Custom Fields** (columns Z–AB):
+
+| Column | Meaning |
+|---|---|
+| Custom Field Slot | 1–10, fixed. Slot N is Lead Management column E + (N − 1). |
+| Field Name | Header shown on Lead Management |
+| Active (Yes/No) | Yes = column shown; No = column hidden (its data is kept) |
+
+**Columns are never inserted or deleted** for custom fields, only shown or hidden, so every other column, formula and report keeps its position.
+
+### Add a custom field
+1. **Lead CRM → Add custom field…** (admins only).
+2. Type the name, for example `Course Interested`. It must not repeat another column's name.
+
+The script takes the next free slot, preferring one whose column is empty. It marks the slot Active, writes the name as the header, shows the column and selects it.
+- If every free slot still holds data from a removed field, you are warned that the old data will appear under the new name, and asked to confirm.
+- When all 10 slots are in use, you are told to remove one first.
+
+### Remove a custom field
+1. **Lead CRM → Remove custom field…**.
+2. Enter the number or name of the field from the list shown.
+
+If the column contains data, you see how many values it holds and must confirm. The column is then **hidden** and the slot marked inactive. **The data is not deleted.** It reappears if that slot is activated again: set Active = Yes in the table, or add a field when this is the only free slot.
+
+### Rename a custom field
+Either of these works; the other place updates automatically:
+- change **Field Name** in the Custom Fields table;
+- type a new header in Lead Management row 1 (E1–N1).
+
+### Other notes
+- **Editing the table directly:** setting Active to Yes/No in Lists & Settings shows/hides the column immediately (edit trigger). If something gets out of step, run **Admin → Set up / repair workbook**. It re-applies names and visibility from the table.
+- **Re-running setup** keeps every field name, Active status and all custom data.
+- **Upgrading from the original layout** (custom fields in Q–Z): the first repair run moves those columns to E–N, keeping their data. Fields with data or a renamed header become active.
+- **Hidden ≠ secure:** anyone with edit access can unhide a column (right-click → *Unhide*). Do not store sensitive data in custom fields.
+- **A dropdown for a custom field:** select the column cells from row 2 down → **Data → Data validation** → *Dropdown (from a range)*, pointing at a new list in an empty column of Lists & Settings. Setup/repair clears validation on Lead Management, so re-apply it afterwards.
 - **Show the field in reports:** add a COUNTIFS on the column to the Dashboard (admins can edit it), or build a pivot table on a new sheet with **Insert → Pivot table** using `'Lead Management'!A:AH`.
-
-To retire a custom field, rename it (for example "Unused 3") and clear its data. Do not delete the column.
 
 ---
 
@@ -116,6 +144,8 @@ Every row gets its own audit entry (the old owner comes from the hidden snapshot
 
 **Settings (N–P).** Edit only the **Value** column. Settings are found by name.
 
+**Custom Fields (Z–AB).** Slot / Field Name / Active for the optional custom fields. See [Custom fields](#custom-fields-en).
+
 | Setting | Effect |
 |---|---|
 | Lead ID Prefix / Digits | Format of new Lead IDs. Set before go-live; existing IDs never change. |
@@ -139,7 +169,7 @@ Columns **R–X** are automatic helper lists. Do not type there.
 | Area | Protection |
 |---|---|
 | Stage Master, Counsellor Master, Lists & Settings, Dashboard (except its 5 filter cells), Lead Management header row | **Strict**: admins only |
-| Lead Management system and formula columns (A, L, M–N, AA, AC–AI) | **Warning**: callers see a warning. Typing into a formula column is undone automatically; typing into Lead ID is reverted. |
+| Lead Management system and formula columns (A, V, W–X, AA, AC–AI) | **Warning**: callers see a warning. Typing into a formula column is undone automatically; typing into Lead ID is reverted. |
 | Follow-Up Log (whole sheet) | **Warning**: any manual edit is itself recorded as a `Log Edited` System entry |
 
 Why warning-only? The edit trigger and the follow-up form run **as the caller**, so callers need technical write access. Callers must also be able to sort and filter.
@@ -156,7 +186,7 @@ Do not store passwords, ID numbers or other sensitive personal data in custom fi
 
 ## Importing or pasting many leads
 
-1. Paste the data into Lead Management. Paste values only (Ctrl+Shift+V) into the caller columns (B–K, O–Z, AB). Leave column A empty, or include existing unique IDs.
+1. Paste the data into Lead Management. Paste values only (Ctrl+Shift+V) into the caller columns (B–U, Y–Z, AB; E–N only for active custom fields). Leave column A empty, or include existing unique IDs.
 2. Pastes of up to ~2,000 rows are processed automatically: IDs, created dates, defaults, dropdowns and "Lead Created" log entries.
 3. For bigger imports, or if a toast said the system was busy, run **Lead CRM → Admin → Process imported / pasted leads**. It is safe to run any time.
 

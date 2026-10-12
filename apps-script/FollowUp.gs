@@ -272,16 +272,19 @@ function submissionLogged_(subId) {
 
 /** Writes a lead row back in contiguous runs, skipping formula-output columns. */
 function writeLeadRowCells_(sheet, rowNum, row) {
-  // Runs between formula columns. Only the columns the form owns are rewritten, never names / contacts / custom fields.
-  var runs = [[LC.ID, LC.OUTCOME], [LC.UPDATED_BY, LC.CUSTOM_LAST], [LC.CREATED, LC.PREV_OWNER], [LC.SNAPSHOT, LC.SNAPSHOT]];
+  // Only the columns the form owns are rewritten (never names, contacts, custom fields or formula
+  // columns), grouped into runs of adjacent columns: one setValues call per run.
   var owned = [LC.STAGE, LC.SUBSTAGE, LC.PRIORITY, LC.LAST_CONTACT, LC.NEXT_FU, LC.OUTCOME, LC.UPDATED_BY,
-    LC.LAST_ACTIVITY, LC.REMARKS, LC.STATUS, LC.LAST_FU_DATE, LC.STAGE_CHANGED, LC.ASSIGNED_DATE, LC.PREV_OWNER, LC.SNAPSHOT];
-  runs.forEach(function (run) {
-    var cols = owned.filter(function (c) { return c >= run[0] && c <= run[1]; });
-    if (!cols.length) return;
-    var a = Math.min.apply(null, cols), b = Math.max.apply(null, cols);
-    sheet.getRange(rowNum, a, 1, b - a + 1).setValues([row.slice(a - 1, b)]);
-  });
+    LC.LAST_ACTIVITY, LC.REMARKS, LC.STATUS, LC.LAST_FU_DATE, LC.STAGE_CHANGED, LC.ASSIGNED_DATE, LC.PREV_OWNER, LC.SNAPSHOT]
+    .filter(function (c) { return LEAD_FORMULA_COLS.indexOf(c) < 0; })
+    .sort(function (a, b) { return a - b; });
+  var start = owned[0];
+  for (var i = 1; i <= owned.length; i++) {
+    if (i < owned.length && owned[i] === owned[i - 1] + 1) continue;
+    var end = owned[i - 1];
+    sheet.getRange(rowNum, start, 1, end - start + 1).setValues([row.slice(start - 1, end)]);
+    start = owned[i];
+  }
 }
 
 /* ================================================================== */

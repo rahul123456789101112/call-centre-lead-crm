@@ -26,7 +26,7 @@ This CRM is built only on Google Sheets and Apps Script. These are the trade-off
 9. **Substage dropdowns are per-row rules written by the script.**
    - After sorting, inserting or deleting rows they are refreshed by the onChange trigger (throttled to every 30 s). Whether Google fires onChange for a sort has not been confirmed (see "What was verified" below).
    - *Refresh substage dropdowns* is the fallback, and the script re-validates every substage change regardless.
-10. After choosing a stage, there is a short delay (usually under 2 seconds) before the matching substage list appears in G.
+10. After choosing a stage, there is a short delay (usually under 2 seconds) before the matching substage list appears in the Lead Substage column (Q).
 
 ## Reporting
 11. **The dashboard reserves fixed space:**
@@ -52,7 +52,7 @@ This CRM is built only on Google Sheets and Apps Script. These are the trade-off
 
 ## Data entry
 18. **Lead Status values** `Converted`, `Lost`, `Duplicate` are fixed words used by reports and colours. Other lists are fully configurable.
-19. **Columns must not be inserted, deleted or reordered** in Lead Management (A–AI) or Follow-Up Log (A–R). Headers can be renamed.
+19. **Columns must not be inserted, deleted or reordered** in Lead Management (A–AI) or Follow-Up Log (A–R). Custom fields use 10 fixed, hideable slots (E–N); more than 10 custom fields are not supported. A hidden custom column is not private: any editor can unhide it.
 20. **Lead IDs are unique and stable but not gap-free:** rejected or concurrent attempts can skip numbers.
 21. **Activity backdating** in the form is limited by *Max Backdate Days*. Activities typed directly into the log are not supported (they are recorded as tampering).
 22. **Email reminders** depend on Google's daily MailApp quota (about 100 recipients/day for consumer accounts, about 1,500 for Workspace).

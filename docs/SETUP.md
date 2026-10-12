@@ -20,6 +20,7 @@ This builds the complete Call Centre Lead CRM inside a **blank Google Sheet** us
    | `Triggers.gs` | Script → `Triggers` |
    | `FollowUp.gs` | Script → `FollowUp` |
    | `Menu.gs` | Script → `Menu` |
+   | `CustomFields.gs` | Script → `CustomFields` |
    | `FollowUpSidebar.html` | HTML → `FollowUpSidebar` (the name must match exactly) |
 
    Delete the default `Code.gs` (or replace its contents with one of the files).
@@ -133,11 +134,11 @@ Email → counsellor name comes from **Counsellor Master → Email ID**, which i
 | Stage Master | Stages / substages / order / active flag | Admins |
 | Counsellor Master | Counsellors, emails, teams, active flag | Admins |
 | Dashboard | KPIs, reports A–G, 6 charts | Formulas (filter cells editable by all) |
-| Lists & Settings | Dropdown lists, ageing buckets, settings, auto helper lists | Admins |
+| Lists & Settings | Dropdown lists, ageing buckets, settings, custom-field table, auto helper lists | Admins |
 
 ### Lead Management columns
 
-A–AB are exactly as specified. AC–AI are additional tracking columns.
+A–AB hold every field from the specification. The 10 custom fields sit directly after Email ID. AC–AI are additional tracking columns.
 
 | Col | Field | Type | Notes |
 |---|---|---|---|
@@ -145,19 +146,19 @@ A–AB are exactly as specified. AC–AI are additional tracking columns.
 | B | Lead Name | Caller | |
 | C | Mobile Number | Caller | Plain-text format; pattern check (warning) and duplicate check |
 | D | Email ID | Caller | Format check (warning); duplicate check |
-| E | Assigned Counsellor | Caller/Admin | Dropdown of **active** counsellors |
-| F | Lead Stage | Caller | Dropdown of **active** stages, in Stage Order |
-| G | Lead Substage | Caller | **Dependent** dropdown (see §7) |
-| H | Lead Priority | Caller | Critical / Hot / Warm / Cold |
-| I | Last Contact Date | Script/Caller | Latest Contact activity date; cannot be in the future |
-| J | Next Follow-Up Date | Caller/Script | Must be a valid date |
-| K | Last Follow-Up Outcome | Script/Caller | Dropdown from Contact Outcome list |
-| L | Follow-Up Count | Formula | Count of Contact activities in the log |
-| M | Last Updated By | System | Counsellor name / email |
-| N | Last Activity Timestamp | System | Fixed date-time value, never `NOW()` |
-| O | Lead Remarks | Caller/Script | Latest remarks |
-| P | Lead Source | Caller | Dropdown (other values allowed, flagged) |
-| Q–Z | Custom Field 1–10 | Caller | Blank and free; admins may rename headers |
+| E–N | Custom Field 1–10 (slots 1–10) | Caller | **Optional.** All 10 are hidden after setup. An admin turns one on with **Lead CRM → Add custom field**, which shows the column with the chosen name. See [ADMIN.md](ADMIN.md#custom-fields-en). |
+| O | Assigned Counsellor | Caller/Admin | Dropdown of **active** counsellors |
+| P | Lead Stage | Caller | Dropdown of **active** stages, in Stage Order |
+| Q | Lead Substage | Caller | **Dependent** dropdown (see §7) |
+| R | Lead Priority | Caller | Critical / Hot / Warm / Cold |
+| S | Last Contact Date | Script/Caller | Latest Contact activity date; cannot be in the future |
+| T | Next Follow-Up Date | Caller/Script | Must be a valid date |
+| U | Last Follow-Up Outcome | Script/Caller | Dropdown from Contact Outcome list |
+| V | Follow-Up Count | Formula | Count of Contact activities in the log |
+| W | Last Updated By | System | Counsellor name / email |
+| X | Last Activity Timestamp | System | Fixed date-time value, never `NOW()` |
+| Y | Lead Remarks | Caller/Script | Latest remarks |
+| Z | Lead Source | Caller | Dropdown (other values allowed, flagged) |
 | AA | Lead Created Date | System | Fixed timestamp |
 | AB | Lead Status | Caller | Open / On Hold / Converted / Lost / Duplicate |
 | AC | Last Follow-Up Date | System | Date of latest activity logged via the form |
@@ -168,6 +169,10 @@ A–AB are exactly as specified. AC–AI are additional tracking columns.
 | AH | Data Quality Flags | Formula | Missing/invalid contact, unassigned, stage problems, overdue, missing follow-up date. Duplicates are shown by colour in C/D. |
 | AI | Audit Snapshot | System (hidden) | JSON of owner/stage/substage/status/next FU used to detect changes, including bulk pastes |
 
+Column positions are fixed. Custom fields are switched on and off by **showing and hiding** E–N, never by inserting or deleting columns. The script builds every formula's column letters from `LC` in `Config.gs` (via `lcf_()`), so formulas, validation, colours and the dashboard always point at the right columns.
+
+> **Upgrading a sheet built with the original layout** (custom fields in Q–Z): run **Set up / repair workbook** once. It moves Q–Z to E–N with `moveColumns`, keeping all data. Any custom field that holds data or was renamed becomes an active field with that name; the rest are hidden.
+
 **Header colours:** navy = caller fields, grey = system, green = formula, purple = custom fields.
 
 **Row colours:**
@@ -176,17 +181,17 @@ A–AB are exactly as specified. AC–AI are additional tracking columns.
 |---|---|
 | Green row | Converted |
 | Grey italic row | Lost / Duplicate |
-| Red A + J | Follow-up overdue |
-| Yellow A + J | Follow-up due today |
-| Light blue J | Follow-up due within *Upcoming Follow-Up Window* days |
-| Dark red H | Critical priority |
-| Orange H | Hot priority |
+| Red A + T | Follow-up overdue |
+| Yellow A + T | Follow-up due today |
+| Light blue T | Follow-up due within *Upcoming Follow-Up Window* days |
+| Dark red R | Critical priority |
+| Orange R | Hot priority |
 | Orange C/D | Duplicate mobile/email (conditional formatting; follows the Duplicate Mobile/Email Check setting) |
 | Red A | Duplicate Lead ID |
 
 Alternating row banding, a frozen header (and frozen ID + Name columns) and a filter are enabled.
 
-**Formulas live in the header row** (`L1`, `AG1`, `AH1` use `={"Header"; ARRAYFORMULA(...)}`), so sorting and filtering rows can never move or break them.
+**Formulas live in the header row** (`V1`, `AG1`, `AH1` use `={"Header"; ARRAYFORMULA(...)}`), so sorting and filtering rows can never move or break them.
 
 ### Follow-Up Log columns
 
@@ -204,8 +209,8 @@ The category is stored on each row when it is written, so later changes to the a
 
 ## 7. Dependent dropdown: exact implementation
 
-- **Stage (F):** data validation "list from a range" pointing at `'Lists & Settings'!R2:R`. That range is an auto-formula: active stages from Stage Master, unique, sorted by Stage Order. It updates by itself when Stage Master changes; no script is needed.
-- **Substage (G):** the script sets a **per-row** validation rule ("list of items") containing only the active substages of that row's stage:
+- **Stage (P):** data validation "list from a range" pointing at `'Lists & Settings'!R2:R`. That range is an auto-formula: active stages from Stage Master, unique, sorted by Stage Order. It updates by itself when Stage Master changes; no script is needed.
+- **Substage (Q):** the script sets a **per-row** validation rule ("list of items") containing only the active substages of that row's stage:
   - **When the stage changes** (typing, paste, or the form): that row's rule is rebuilt immediately. If the existing substage no longer belongs to the new stage, it is **cleared**. A `Substage Cleared` System entry records the old value, and the user sees a message.
   - **When Stage Master is edited:** all rows' rules are rebuilt in one batch call (a few seconds for 10,000 rows).
   - **After sorting / inserting / deleting rows:** the installable onChange trigger rebuilds them (throttled to once per 30 seconds). **Lead CRM → Refresh substage dropdowns** does the same on demand.

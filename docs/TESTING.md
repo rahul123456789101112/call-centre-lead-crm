@@ -19,13 +19,13 @@ Dates below use "today" (T) and "tomorrow" (T+1). Record each result as Pass or 
 - A2 = `LD-000001`
 - AA2 = today's date and time (fixed; it does not change on reload)
 - AB2 = `Open`
-- F2 = `New Lead`, G2 = `Not Contacted` (the default settings)
-- M2 = `Sample Counsellor 1`; N2 = current date-time
+- P2 = `New Lead`, Q2 = `Not Contacted` (the default settings)
+- W2 = `Sample Counsellor 1`; X2 = current date-time
 - Follow-Up Log has a new `Lead Created` row with Activity Category `System`
 - AH2 shows flags such as "Unassigned; No next follow-up date"
 
 ### 2. Assign a counsellor from the dropdown
-1. Click E2. The dropdown lists only **active** counsellors (Sample Counsellor 3 is inactive and absent).
+1. Click O2 (**Assigned Counsellor**). The dropdown lists only **active** counsellors (Sample Counsellor 3 is inactive and absent).
 2. Choose *Sample Counsellor 1*.
 
 **Expected:**
@@ -34,23 +34,23 @@ Dates below use "today" (T) and "tomorrow" (T+1). Record each result as Pass or 
 - Typing a name that is not in the list is rejected
 
 ### 3. Select a stage and confirm only its substages appear
-1. Set F2 = `Interested`.
-2. Open the G2 dropdown.
+1. Set P2 (**Lead Stage**) = `Interested`.
+2. Open the Q2 (**Lead Substage**) dropdown.
 
 **Expected:** only `Highly Interested`, `Details Shared` and `Follow-Up Required` are offered. Repeat with `Application` and `Payment`: each shows only its own substages, never the whole list.
 
 ### 4. Change the stage and confirm the old substage is cleared or flagged
-1. Set G2 = `Details Shared`.
-2. Change F2 to `Payment`.
+1. Set Q2 = `Details Shared`.
+2. Change P2 to `Payment`.
 
 **Expected:**
-- G2 becomes empty
+- Q2 becomes empty
 - a toast says "Substage "Details Shared" does not belong to "Payment" and was cleared…"
-- the G2 dropdown now lists Payment substages
+- the Q2 dropdown now lists Payment substages
 - the log has `Stage Updated` (Interested → Payment) and `Substage Cleared` (System, old value Details Shared)
 - AD2 = now
 
-Also try typing `Not Eligible` into G2 while F2 = Payment. It is rejected by validation, or cleared by the script if pasted.
+Also try typing `Not Eligible` into Q2 while P2 = Payment. It is rejected by validation, or cleared by the script if pasted.
 
 ### 5. Record multiple follow-ups against one Lead ID
 1. Select any cell in row 2 → **Lead CRM → Log Follow-Up…**. The sidebar loads LD-000001 automatically.
@@ -70,15 +70,15 @@ Also try typing `Not Eligible` into G2 while F2 = Payment. It is rejected by val
 
 ### 7. Confirm the latest activity timestamp and user are displayed correctly
 **Expected** on row 2:
-- K = `Call Back`; O = `Call 3`
-- J = T+3; I = today; AC = today
-- M = `Sample Counsellor 1`; N = time of the third save
+- U (Outcome) = `Call Back`; Y (Remarks) = `Call 3`
+- T (Next Follow-Up) = T+3; S (Last Contact) = today; AC = today
+- W (Last Updated By) = `Sample Counsellor 1`; X (Last Activity) = time of the third save
 
-Reload the sheet: N and AA do not change (they are stored values, not formulas).
+Reload the sheet: X and AA do not change (they are stored values, not formulas).
 
 ### 8. Confirm follow-up counts and date-range reports are accurate
 **Expected:**
-- L2 (Follow-Up Count) = 3, counting only Contact activities, not audit rows
+- V2 (Follow-Up Count) = 3, counting only Contact activities, not audit rows
 - AG2 (Total Activities) = 3 + the Record Update rows
 - On the Dashboard with Period = *Today*: Follow-Ups Completed = 3 and Unique Leads Contacted = 1
 - Period = *Yesterday*: Follow-Ups Completed = 0
@@ -94,17 +94,17 @@ Reload the sheet: N and AA do not change (they are stored values, not formulas).
 Add a follow-up on a second lead. Unique Leads Contacted then becomes 2.
 
 ### 10. Confirm overdue follow-ups are highlighted
-1. Add a second lead (row 3) and type a Next Follow-Up Date of T−2 in J3.
+1. Add a second lead (row 3) and type a Next Follow-Up Date of T−2 in T3.
 
 **Expected:**
 - A toast warns that the date is in the past
-- A3 and J3 turn **red**
+- A3 and T3 turn **red**
 - AH3 contains "Overdue follow-up"
 - Dashboard *Follow-Ups Overdue* increases, and the lead appears in report E with Days Overdue = 2
 
 Also check:
-- set J3 = today → yellow
-- set J3 = T+2 → light blue (with the default window of 3 days)
+- set T3 = today → yellow
+- set T3 = T+2 → light blue (with the default window of 3 days)
 - set AB3 = `Converted` → the whole row turns green and the overdue colours no longer apply
 - set AB3 = `Lost` → the row turns grey
 
@@ -124,7 +124,7 @@ Set the Counsellor filter to *Sample Counsellor 2*: every KPI and report reduces
 **Expected:**
 - A toast says "substage dropdowns refreshed"
 - ID `STG-017` and `Active` are filled in automatically
-- F dropdown on Lead Management now includes `Counselling`, between Interested and Application
+- the Lead Stage dropdown (P) on Lead Management now includes `Counselling`, between Interested and Application
 - Choosing it offers only `Session Booked` in G
 - The follow-up form (reopen it) lists the new stage
 - Dashboard reports A and B include it
@@ -139,14 +139,23 @@ Set its Active Status to `Inactive`. It disappears from new selections. A lead a
 - the Assigned Counsellor dropdown and the follow-up form's counsellor list include them
 - the Dashboard counsellor filter includes them
 
-### 14. Rename one custom field and confirm its data remains editable
-1. Type `Course` in Q2 and `City` in R2.
-2. As admin, change header Q1 from `Custom Field 1` to `Course Interested`.
-
-**Expected:**
-- Q2 still shows `Course` and can be edited by a caller
-- the data is unaffected
-- re-running **Admin → Set up / repair workbook** keeps the name `Course Interested`
+### 14. Custom fields: add, rename, remove; data stays editable
+1. Check that columns E–N are hidden after setup. In Lists & Settings → Custom Fields (Z–AB), all 10 slots show Active = `No`.
+2. As admin, **Lead CRM → Add custom field…** → type `Course Interested`.
+   **Expected:** column **E** appears with header `Course Interested`; slot 1 is Active = `Yes`.
+3. Type `MBA` in E2. As a caller, edit it to `MBA Finance`.
+   **Expected:** it is editable; W2/X2 update (it counts as a record update); nothing else changes.
+4. Add a second field `City`. **Expected:** column F appears.
+5. Rename it to `Home City`:
+   - by changing *Field Name* in the table → F1 changes;
+   - then type `Town` in F1 → the table shows `Town`.
+6. Try adding a field called `Lead Source`. **Expected:** rejected as an existing column name.
+7. **Lead CRM → Remove custom field…** → enter `1` (Course Interested).
+   **Expected:** a warning that column E contains 1 value; answer **No** → nothing changes. Repeat and answer **Yes** → column E is hidden, slot 1 Active = `No`, and E2 still holds `MBA Finance` (right-click the column header → Unhide to check, then hide it again).
+8. Add a field `Batch`. **Expected:** it takes the next *empty* free slot (column G), not column E with the old data.
+9. Run **Admin → Set up / repair workbook**.
+   **Expected:** `Town` (F) and `Batch` (G) are still shown with their names, E is still hidden with its data, and all other leads, formulas and colours are intact.
+10. Confirm no columns were inserted or deleted: Assigned Counsellor is still column **O** and Lead Status still **AB**.
 
 ### 15. Test multiple users making updates
 1. Account A has row 2 selected and Account B has row 3. Both open **Log Follow-Up**.
@@ -155,9 +164,9 @@ Set its Active Status to `Inactive`. It disappears from new selections. A lead a
 
 **Expected:**
 - Both activities are saved with distinct, sequential Activity IDs and no lost or duplicate rows (LockService serialises them)
-- Each lead row shows the right M (user) and N (time)
+- Each lead row shows the right W (user) and X (time)
 - Account B's rows show *Sample Counsellor 2* (or B's email if B is not in Counsellor Master)
-- If B is a gmail.com account, M shows B's name once B has opened the sidebar at least once (temporary-key mapping). Before that it shows "Unidentified user". This is a documented limitation.
+- If B is a gmail.com account, W shows B's name once B has opened the sidebar at least once (temporary-key mapping). Before that it shows "Unidentified user". This is a documented limitation.
 
 ### 16. Confirm dashboard metrics respond to the selected date range
 1. Cycle the Reporting Period through Today, Yesterday, Last 7 Days, Last 30 Days, Current Month, Previous Month.
@@ -176,7 +185,7 @@ Set its Active Status to `Inactive`. It disappears from new selections. A lead a
 3. Filter by Lead Stage = Interested, then clear the filter.
 
 **Expected:**
-- every lead keeps its Lead ID, and the counts move with their lead (formulas are in L1/AG1/AH1 and recalculate by ID)
+- every lead keeps its Lead ID, and the counts move with their lead (formulas are in V1/AG1/AH1 and recalculate by ID)
 - no `#REF!` errors
 - after a few seconds the substage dropdowns follow their rows (onChange refresh); if not, run **Lead CRM → Refresh substage dropdowns**
 - logging a follow-up for LD-000001 updates the row it now sits on, because the script looks rows up by ID, not row number
@@ -191,17 +200,20 @@ Set its Active Status to `Inactive`. It disappears from new selections. A lead a
 | Duplicate mobile (block) | Set *Duplicate Mobile Check* = Block, repeat | Value cleared, toast "Blocked" |
 | Invalid mobile | Enter `12ab` | Warning triangle; AH "Invalid mobile format" (still allowed) |
 | Lead ID protection | Type over A2 | Warning dialog; value restored |
-| Formula protection | Type in L2 | Entry removed automatically |
+| Formula protection | Type in V2 | Entry removed automatically |
 | Append-only log | Edit any log cell | Warning; a `Log Edited` System row records old/new |
 | Mandatory form fields | Save the form with no outcome / remarks / next date | Clear error list, nothing saved |
-| Future last contact date | Type T+1 into I2 | Rejected |
+| Future last contact date | Type T+1 into S2 | Rejected |
 | Import | Paste 200 rows of names/mobiles in B:C | IDs, created dates, defaults, Lead Created entries |
-| Reassignment history | Change E2 twice | AF = previous owner; two `Lead Assigned` rows |
+| Reassignment history | Change O2 twice | AF = previous owner; two `Lead Assigned` rows |
+| All custom slots used | Add fields until 10 are active, then add one more | Message: all slots in use; nothing changes |
+| Custom field via table | Set slot 3 Active = Yes in Lists & Settings | Column G is shown immediately with its Field Name |
+| Upgrade from old layout | In a copy of a sheet built by the first version (custom fields Q–Z), run *Set up / repair workbook* | Custom data moves to E–N; used/renamed fields active, others hidden; Assigned Counsellor now in O |
 | Health check | Admin → Run health check | All `OK` (or explained `CHECK`) |
 
 ## Automated pre-release check (developers)
 
-[`test/`](../test) contains an in-memory mock of the Sheets services and a scenario script. It runs `setupWorkbookQuickTest()` and a staged `setupWorkbook()` (forced to stop after every stage, to prove it resumes), simulates edits, pastes, sorting, sidebar submissions, Stage/Counsellor Master changes and log tampering, and asserts the results. It also checks that every formula the script writes has balanced parentheses, braces and quotes.
+[`test/`](../test) contains an in-memory mock of the Sheets services and a scenario script. It runs `setupWorkbookQuickTest()`, an old-layout migration, the custom-field add/remove/rename flows, and a staged `setupWorkbook()` (forced to stop after every stage, to prove it resumes), simulates edits, pastes, sorting, sidebar submissions, Stage/Counsellor Master changes and log tampering, and asserts the results. It also checks that every formula the script writes has balanced parentheses, braces and quotes.
 
 ```
 node test/run-mock-tests.js apps-script

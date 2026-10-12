@@ -1,7 +1,7 @@
 // Minimal in-memory mock of the Apps Script services used by the Lead CRM.
 // Formulas are stored, not evaluated. Unknown chainable methods are no-ops.
 'use strict';
-const toasts = [], alerts = [], formulas = [], triggers = [];
+const toasts = [], alerts = [], formulas = [], triggers = [], prompts = [], confirms = [];
 let tempKey = 'TK1', activeEmail = 'admin@example.com';
 
 function chain(log) {
@@ -22,7 +22,7 @@ function parseA1(a1) {
 function letter(n) { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
 
 class Sheet {
-  constructor(ss, name) { this.ss = ss; this.name = name; this.maxRows = 1000; this.maxCols = 26; this.v = {}; this.f = {}; this.dv = {}; this.charts = []; this.filter = null; this.prot = []; }
+  constructor(ss, name) { this.ss = ss; this.name = name; this.maxRows = 1000; this.maxCols = 26; this.v = {}; this.f = {}; this.dv = {}; this.charts = []; this.filter = null; this.prot = []; this.hidden = new Set(); }
   key(r, c) { return r + ':' + c; }
   getName() { return this.name; }
   getParent() { return this.ss; }
@@ -54,7 +54,19 @@ class Sheet {
   setConditionalFormatRules(r) { this.cf = r; }
   clearConditionalFormatRules() { this.cf = []; }
   clear() { this.v = {}; this.f = {}; }
-  hideColumns() {} setColumnWidths() {} setFrozenRows() {} setFrozenColumns() {} setColumnWidth() {} setRowHeight() {} setTabColor() {} setHiddenGridlines() {}
+  hideColumns(c, n) { for (let i = 0; i < (n || 1); i++) this.hidden.add(c + i); }
+  showColumns(c, n) { for (let i = 0; i < (n || 1); i++) this.hidden.delete(c + i); }
+  isColumnHiddenByUser(c) { return this.hidden.has(c); }
+  moveColumns(range, dest) {
+    // Reorder columns: take [c1..c2] and place them before column `dest` (dest < c1 in our use).
+    const c1 = range.c, n = range.nc, order = [];
+    for (let c = 1; c <= this.maxCols; c++) order.push(c);
+    const moved = order.splice(c1 - 1, n);
+    order.splice(dest - 1, 0, ...moved);            // order[newIndex] = oldColumn
+    const remap = obj => { const out = {}; for (const k in obj) { const [r, c] = k.split(':').map(Number); out[r + ':' + (order.indexOf(c) + 1)] = obj[k]; } return out; };
+    this.v = remap(this.v); this.f = remap(this.f); this.dv = remap(this.dv);
+  }
+  setColumnWidths() {} setFrozenRows() {} setFrozenColumns() {} setColumnWidth() {} setRowHeight() {} setTabColor() {} setHiddenGridlines() {}
   setActiveSelection() {} getActiveCell() { return this.getRange(this.ss.activeRow || 2, 1); }
 }
 class Protection {
@@ -155,7 +167,7 @@ function makeGlobals(ss) {
     console, Date, JSON, Math, Object, Array, String, Number, RegExp, Error, parseInt, parseFloat, isNaN,
     SpreadsheetApp: {
       getActive: () => ss, getActiveSpreadsheet: () => ss, getActiveSheet: () => ss.active, flush() {},
-      getUi: () => ({ alert: (...a) => { alerts.push(a[1] || a[0]); }, ButtonSet: {}, Button: { OK: 'OK' }, createMenu: () => chain(), showSidebar() {}, showModalDialog() {}, showModelessDialog: (h, t) => { alerts.push(h.__msg || t); }, prompt: () => ({ getSelectedButton: () => 'OK', getResponseText: () => '' }) }),
+      getUi: () => ({ alert: (...a) => { alerts.push(a[1] || a[0]); return a.length > 2 && a[2] === 'YES_NO' ? (confirms.shift() || 'NO') : 'OK'; }, ButtonSet: { OK: 'OK', YES_NO: 'YES_NO', OK_CANCEL: 'OK_CANCEL' }, Button: { OK: 'OK', YES: 'YES', NO: 'NO' }, createMenu: () => chain(), showSidebar() {}, showModalDialog() {}, showModelessDialog: (h, t) => { alerts.push(h.__msg || t); }, prompt: () => { const t = prompts.length ? prompts.shift() : ''; return { getSelectedButton: () => 'OK', getResponseText: () => t }; } }),
       newDataValidation: () => builder('dv'), newConditionalFormatRule: () => builder('cf'), newFilterCriteria: () => builder('fc'),
       BandingTheme: {}, ProtectionType: { RANGE: 'RANGE', SHEET: 'SHEET' }, Direction: { UP: 'UP' }, BorderStyle: {}, RelativeDate: {}
     },
@@ -177,4 +189,4 @@ function makeGlobals(ss) {
   };
 }
 
-module.exports = { Spreadsheet, makeGlobals, toasts, alerts, formulas, triggers, setUser(e, k) { activeEmail = e; tempKey = k; } };
+module.exports = { Spreadsheet, makeGlobals, toasts, alerts, formulas, triggers, prompts, confirms, setUser(e, k) { activeEmail = e; tempKey = k; } };

@@ -35,12 +35,12 @@ ok(runs === 10, 'setup resumed across ' + runs + ' runs (10 stages)');
 ok(M.alerts.filter(a => /NOT finished/.test(a)).length === 9 && /continue from stage 2/.test(M.alerts.find(a => /NOT finished/.test(a))), 'each partial run says to run again');
 ok(/created with 10[,.]?000 lead rows/.test(M.alerts[M.alerts.length - 1]), 'final run reports completion');
 vm.runInContext('SETUP_BUDGET_MS = 270000', g);
-ok(LM().getRange('G5').getDataValidation() === null, 'no substage rules on empty rows after setup');
+ok(LM().getRange('Q5').getDataValidation() === null, 'no substage rules on empty rows after setup');
 ok(['Lead Management', 'Follow-Up Log', 'Stage Master', 'Counsellor Master', 'Dashboard', 'Lists & Settings'].every(n => ss.getSheetByName(n)), 'all 6 sheets created');
 ok(!ss.getSheetByName('Sheet1'), 'default Sheet1 removed');
 ok(LM().getMaxRows() >= 10001, 'Lead Management sized for 10,000 leads');
-ok(cell(LM(), 'A1') === 'Lead ID' && cell(LM(), 'AB1') === 'Lead Status' && cell(LM(), 'Z1') === 'Custom Field 10', 'lead headers in required order');
-ok(/^=\{"Follow-Up Count"/.test(LM().getRange('L1').getFormula()), 'L1 header array formula');
+ok(cell(LM(), 'A1') === 'Lead ID' && cell(LM(), 'AB1') === 'Lead Status' && cell(LM(), 'N1') === 'Custom Field 10' && cell(LM(), 'O1') === 'Assigned Counsellor' && cell(LM(), 'Z1') === 'Lead Source', 'lead headers in required order');
+ok(/^=\{"Follow-Up Count"/.test(LM().getRange('V1').getFormula()), 'L1 header array formula');
 ok(ss.getSheetByName('Stage Master').getLastRow() === 17, '16 sample stage rows');
 ok(ss.getSheetByName('Dashboard').charts.length === 6, 'dashboard charts = ' + ss.getSheetByName('Dashboard').charts.length);
 ok(M.triggers.some(t => t.getHandlerFunction() === 'onChangeInstallable'), 'onChange trigger installed');
@@ -63,6 +63,27 @@ for (const [where, f] of M.formulas) {
 }
 ok(bad === 0, 'all ' + M.formulas.length + ' written formulas are balanced');
 
+// ---------- custom fields ----------
+const LS_ = () => ss.getSheetByName('Lists & Settings');
+ok([5,6,7,8,9,10,11,12,13,14].every(c => LM().isColumnHiddenByUser(c)), 'all 10 custom slots hidden after setup');
+ok(JSON.stringify(LS_().getRange('Z2:AB3').getValues()) === JSON.stringify([[1, 'Custom Field 1', 'No'], [2, 'Custom Field 2', 'No']]), 'Custom Fields table starts inactive');
+M.prompts.push('Course Interested'); fresh(); g.addCustomField();
+ok(!LM().isColumnHiddenByUser(5) && cell(LM(), 'E1') === 'Course Interested' && cell(LS_(), 'AB2') === 'Yes', 'Add custom field uses slot 1, shows column E');
+M.prompts.push('Lead Source'); fresh(); g.addCustomField();
+ok(cell(LS_(), 'AB3') === 'No' && M.alerts.some(a => /already a column name/.test(a)), 'duplicate field name rejected');
+edit('Lead Management', 'E2', 'MBA');
+M.prompts.push('1'); M.confirms.push('NO'); fresh(); g.removeCustomField();
+ok(!LM().isColumnHiddenByUser(5) && cell(LS_(), 'AB2') === 'Yes', 'remove cancelled when user answers No to data warning');
+M.prompts.push('Course Interested'); M.confirms.push('YES'); fresh(); g.removeCustomField();
+ok(LM().isColumnHiddenByUser(5) && cell(LS_(), 'AB2') === 'No' && cell(LM(), 'E2') === 'MBA', 'remove hides column, marks inactive, keeps data');
+ok(M.alerts.some(a => /contains 1 value/.test(a)), 'remove warned about existing data');
+M.prompts.push('City'); fresh(); g.addCustomField();
+ok(cell(LS_(), 'AA3') === 'City' && cell(LS_(), 'AB3') === 'Yes' && LM().isColumnHiddenByUser(5), 'add prefers an empty free slot (slot 2)');
+LS_().getRange('AA3').setValue('Home City'); edit('Lists & Settings', 'AA3', undefined);
+ok(cell(LM(), 'F1') === 'Home City', 'renaming in the Custom Fields table updates the header');
+LM().getRange('F1').setValue('Town'); edit('Lead Management', 'F1', undefined);
+ok(cell(LS_(), 'AA3') === 'Town', 'renaming the header updates the table');
+
 // ---------- new lead ----------
 M.setUser('caller1@example.com', 'TK1');
 const cm = ss.getSheetByName('Counsellor Master');
@@ -70,34 +91,34 @@ cm.getRange('C2').setValue('caller1@example.com');
 edit('Lead Management', 'B2', 'Ravi Kumar');
 ok(cell(LM(), 'A2') === 'LD-000001', 'Lead ID generated: ' + cell(LM(), 'A2'));
 ok(cell(LM(), 'AA2') instanceof Date, 'created timestamp fixed value');
-ok(cell(LM(), 'AB2') === 'Open' && cell(LM(), 'F2') === 'New Lead' && cell(LM(), 'G2') === 'Not Contacted', 'defaults applied');
-ok(cell(LM(), 'M2') === 'Sample Counsellor 1', 'Last Updated By mapped to counsellor: ' + cell(LM(), 'M2'));
+ok(cell(LM(), 'AB2') === 'Open' && cell(LM(), 'P2') === 'New Lead' && cell(LM(), 'Q2') === 'Not Contacted', 'defaults applied');
+ok(cell(LM(), 'W2') === 'Sample Counsellor 1', 'Last Updated By mapped to counsellor: ' + cell(LM(), 'W2'));
 let rows = logRows();
 ok(rows.length === 1 && rows[0][5] === 'Lead Created' && rows[0][12] === 'System' && rows[0][0] === 'ACT-000001', 'Lead Created system entry');
-const dvG = LM().getRange('G2').getDataValidation();
+const dvG = LM().getRange('Q2').getDataValidation();
 ok(dvG && JSON.stringify(dvG.calls).includes('First Attempt Pending') && !JSON.stringify(dvG.calls).includes('Connected'), 'G2 dropdown = New Lead substages only');
 
 // ---------- assignment ----------
-edit('Lead Management', 'E2', 'Sample Counsellor 1', undefined);
+edit('Lead Management', 'O2', 'Sample Counsellor 1', undefined);
 rows = logRows();
 ok(rows.length === 2 && rows[1][5] === 'Lead Assigned' && rows[1][15] === 'Sample Counsellor 1', 'Lead Assigned audit');
 ok(cell(LM(), 'AE2') instanceof Date, 'Lead Assigned Date stamped');
-edit('Lead Management', 'E2', 'Sample Counsellor 2', 'Sample Counsellor 1');
+edit('Lead Management', 'O2', 'Sample Counsellor 2', 'Sample Counsellor 1');
 ok(cell(LM(), 'AF2') === 'Sample Counsellor 1', 'Previous Counsellor kept on reassignment');
 
 // ---------- stage change clears invalid substage ----------
-edit('Lead Management', 'F2', 'Interested', 'New Lead');
-ok(cell(LM(), 'G2') === '', 'invalid substage cleared after stage change');
+edit('Lead Management', 'P2', 'Interested', 'New Lead');
+ok(cell(LM(), 'Q2') === '', 'invalid substage cleared after stage change');
 rows = logRows();
 ok(rows.some(r => r[5] === 'Stage Updated' && r[14] === 'New Lead' && r[15] === 'Interested'), 'Stage Updated audit old->new');
 ok(rows.some(r => r[5] === 'Substage Cleared' && r[14] === 'Not Contacted'), 'Substage Cleared system entry');
-const dvG2 = JSON.stringify(LM().getRange('G2').getDataValidation().calls);
+const dvG2 = JSON.stringify(LM().getRange('Q2').getDataValidation().calls);
 ok(dvG2.includes('Highly Interested') && !dvG2.includes('Not Contacted'), 'G2 dropdown now Interested substages');
 ok(cell(LM(), 'AD2') instanceof Date, 'Last Stage Change Date stamped');
-edit('Lead Management', 'G2', 'Details Shared', '');
-ok(cell(LM(), 'G2') === 'Details Shared', 'valid substage kept');
-edit('Lead Management', 'G2', 'Payment Pending', 'Details Shared');
-ok(cell(LM(), 'G2') === '', 'typed substage from another stage cleared');
+edit('Lead Management', 'Q2', 'Details Shared', '');
+ok(cell(LM(), 'Q2') === 'Details Shared', 'valid substage kept');
+edit('Lead Management', 'Q2', 'Payment Pending', 'Details Shared');
+ok(cell(LM(), 'Q2') === '', 'typed substage from another stage cleared');
 
 // ---------- paste block with duplicate ID ----------
 edit('Lead Management', 'A3:C5', [['LD-000001', 'Dup Person', '9876543210'], ['', 'Asha', '9876543210'], ['LEGACY-9', 'Legacy', '9123456789']]);
@@ -114,8 +135,8 @@ edit('Lead Management', 'A2', 'HACK', 'LD-000001');
 ok(cell(LM(), 'A2') === 'LD-000001', 'manual Lead ID edit reverted');
 
 // ---------- typing in formula column ----------
-edit('Lead Management', 'L2', 5);
-ok(cell(LM(), 'L2') === '', 'formula column entry cleared');
+edit('Lead Management', 'V2', 5);
+ok(cell(LM(), 'V2') === '', 'formula column entry cleared');
 
 // ---------- follow-up via sidebar ----------
 fresh();
@@ -126,9 +147,9 @@ const today = vm.runInContext('todayKey_()', g), tomorrow = vm.runInContext('add
 fresh();
 let res = g.submitFollowUp({ submissionId: 'S1', leadId: 'LD-000001', counsellor: 'Sample Counsellor 1', activityType: 'Outbound Call', outcome: 'Interested', stage: 'Interested', substage: 'Highly Interested', status: 'Open', nextFollowUp: tomorrow, remarks: 'Asked for fees' });
 ok(res.ok, 'follow-up saved ' + JSON.stringify(res.errors || res.activityId));
-ok(cell(LM(), 'K2') === 'Interested' && cell(LM(), 'O2') === 'Asked for fees' && cell(LM(), 'G2') === 'Highly Interested', 'lead row updated (outcome/remarks/substage)');
-ok(vm.runInContext('toDateKey_', g)(cell(LM(), 'J2')) === tomorrow && vm.runInContext('toDateKey_', g)(cell(LM(), 'I2')) === today, 'next FU + last contact dates');
-ok(cell(LM(), 'N2') instanceof Date && cell(LM(), 'M2') === 'Sample Counsellor 1', 'last activity timestamp + user');
+ok(cell(LM(), 'U2') === 'Interested' && cell(LM(), 'Y2') === 'Asked for fees' && cell(LM(), 'Q2') === 'Highly Interested', 'lead row updated (outcome/remarks/substage)');
+ok(vm.runInContext('toDateKey_', g)(cell(LM(), 'T2')) === tomorrow && vm.runInContext('toDateKey_', g)(cell(LM(), 'S2')) === today, 'next FU + last contact dates');
+ok(cell(LM(), 'X2') instanceof Date && cell(LM(), 'W2') === 'Sample Counsellor 1', 'last activity timestamp + user');
 fresh();
 res = g.submitFollowUp({ submissionId: 'S1', leadId: 'LD-000001', counsellor: 'Sample Counsellor 1', activityType: 'Outbound Call', outcome: 'Interested', stage: 'Interested', substage: 'Highly Interested', status: 'Open', nextFollowUp: tomorrow, remarks: 'Asked for fees' });
 ok(!res.ok && res.duplicate, 'resubmitting same submission ID blocked');
@@ -148,7 +169,7 @@ LM().getRange(6, 1, 1, 35).setValues(r2); LM().getRange(2, 1, 1, 35).setValues(r
 fresh();
 res = g.submitFollowUp({ submissionId: 'S5', leadId: 'LD-000001', counsellor: 'Sample Counsellor 1', activityType: 'Inbound Call', outcome: 'Converted', stage: 'Converted', substage: 'Successfully Converted', status: 'Open', nextFollowUp: '', remarks: 'Paid' });
 ok(res.ok, 'follow-up after sort found lead by ID ' + JSON.stringify(res.errors || ''));
-ok(cell(LM(), 'A6') === 'LD-000001' && cell(LM(), 'AB6') === 'Converted' && cell(LM(), 'J6') === '', 'stage Converted -> status Converted, next FU cleared, correct row');
+ok(cell(LM(), 'A6') === 'LD-000001' && cell(LM(), 'AB6') === 'Converted' && cell(LM(), 'T6') === '', 'stage Converted -> status Converted, next FU cleared, correct row');
 rows = logRows();
 ok(rows.filter(r => r[1] === 'LD-000001' && r[12] === 'Contact').length === 2, 'both contact activities preserved in log');
 ok(rows.some(r => r[13] === 'Lead Status' && r[15] === 'Converted' && r[12] === 'System'), 'conversion event logged (auto status)');
@@ -156,11 +177,11 @@ ok(new Set(rows.map(r => r[0])).size === rows.length, 'activity IDs unique (' + 
 
 // ---------- identity fallback via temporary key ----------
 M.setUser('', 'TK1');
-edit('Lead Management', 'O2', 'note by caller');
-ok(cell(LM(), 'M2') === 'Sample Counsellor 1', 'unidentified email resolved via temp-key mapping: ' + cell(LM(), 'M2'));
+edit('Lead Management', 'Y2', 'note by caller');
+ok(cell(LM(), 'W2') === 'Sample Counsellor 1', 'unidentified email resolved via temp-key mapping: ' + cell(LM(), 'W2'));
 M.setUser('', 'TK-unknown');
-edit('Lead Management', 'O2', 'note 2');
-ok(cell(LM(), 'M2') === 'Unidentified user', 'unknown user labelled: ' + cell(LM(), 'M2'));
+edit('Lead Management', 'Y2', 'note 2');
+ok(cell(LM(), 'W2') === 'Unidentified user', 'unknown user labelled: ' + cell(LM(), 'W2'));
 
 // ---------- Stage Master: add stage + substage ----------
 M.setUser('admin@example.com', 'TKA');
@@ -171,8 +192,8 @@ ok(cell(sm, 'A18') === 'STG-017' && cell(sm, 'F18') === 'Active', 'new stage row
 fresh();
 ok(g.getFollowUpContext().stages.some(s => s.name === 'Counselling' && s.subs[0] === 'Session Booked'), 'new stage/substage available');
 // lead in Counselling stage gets the new list
-edit('Lead Management', 'F3', 'Counselling', 'New Lead');
-ok(JSON.stringify(LM().getRange('G3').getDataValidation().calls).includes('Session Booked'), 'new substage in dependent dropdown');
+edit('Lead Management', 'P3', 'Counselling', 'New Lead');
+ok(JSON.stringify(LM().getRange('Q3').getDataValidation().calls).includes('Session Booked'), 'new substage in dependent dropdown');
 // deactivate substage
 sm.getRange('F18').setValue('Inactive'); edit('Stage Master', 'F18', undefined);
 fresh();
@@ -196,6 +217,23 @@ fresh(); g.refreshDashboard(); g.viewOverdue(); g.viewUnworked(); g.identifyMe()
 // re-run setup (repair) keeps data
 fresh(); g.setupWorkbook();
 ok(cell(LM(), 'A6') === 'LD-000001' && logRows().length > 5, 'repair keeps leads and log');
+ok(cell(LM(), 'F1') === 'Town' && !LM().isColumnHiddenByUser(6) && LM().isColumnHiddenByUser(5) && cell(LS_(), 'AA2') === 'Course Interested' && cell(LS_(), 'AB2') === 'No', 'repair keeps custom field names, active status and visibility');
+ok(LM().getRange(1, 1, 7, 35).getValues().some(r => r[4] === 'MBA'), 'repair keeps hidden custom field data');
+
+// ---------- migration from the original layout (custom fields in Q:Z) ----------
+{
+  const ss3 = new M.Spreadsheet(); const g3 = makeCtx(ss3);
+  const old = ss3.insertSheet('Lead Management', 0); old.maxCols = 35; old.maxRows = 1001;
+  const oldHeaders = ['Lead ID','Lead Name','Mobile Number','Email ID','Assigned Counsellor','Lead Stage','Lead Substage','Lead Priority','Last Contact Date','Next Follow-Up Date','Last Follow-Up Outcome','Follow-Up Count','Last Updated By','Last Activity Timestamp','Lead Remarks','Lead Source','Course','Custom Field 2','Custom Field 3','Custom Field 4','Custom Field 5','Custom Field 6','Custom Field 7','Custom Field 8','Custom Field 9','Batch','Lead Created Date','Lead Status'];
+  old.getRange(1, 1, 1, oldHeaders.length).setValues([oldHeaders]);
+  old.getRange(2, 1, 1, 28).setValues([['LD-000001','Old Lead','9000000000','','Sample Counsellor 1','New Lead','Not Contacted','Hot','','','','','','','old remark','Website','BBA','','','','','','','','','','','Open']]);
+  g3.setupWorkbookQuickTest();
+  const L3 = ss3.getSheetByName('Lead Management'), S3 = ss3.getSheetByName('Lists & Settings');
+  ok(L3.getRange('E1').getValue() === 'Course' && L3.getRange('E2').getValue() === 'BBA' && L3.getRange('O2').getValue() === 'Sample Counsellor 1' && L3.getRange('Y2').getValue() === 'old remark' && L3.getRange('AB2').getValue() === 'Open',
+    'old layout migrated: custom data moved to E:N, core fields moved right');
+  ok(S3.getRange('AB2').getValue() === 'Yes' && S3.getRange('AB3').getValue() === 'No' && S3.getRange('AA11').getValue() === 'Batch' && S3.getRange('AB11').getValue() === 'Yes' && !L3.isColumnHiddenByUser(5) && L3.isColumnHiddenByUser(6),
+    'migrated slots: used/renamed fields active, unused hidden');
+}
 console.log('\nToasts sample:', M.toasts.slice(-6));
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASSED');
 process.exit(fails ? 1 : 0);
