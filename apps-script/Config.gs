@@ -116,7 +116,7 @@ var ACT = {
   SUBSTAGE_CLEARED: 'Substage Cleared', LOG_EDITED: 'Log Edited', FIELD_UPDATED: 'Field Updated',
   EDIT_REVERTED: 'Edit Reverted', SHEET_UPDATE: 'Sheet Update', LEAD_DELETED: 'Lead Deleted',
   LEAD_RESTORED: 'Lead Restored', LEAD_PURGED: 'Lead Purged', SYS_CORRECTED: 'System Field Corrected',
-  CORRECTION_OPENED: 'Correction Window Opened'
+  CORRECTION_OPENED: 'Correction Window Opened', CRM_RESET: 'CRM Reset', CRM_RESTORED: 'CRM Restored'
 };
 
 var PERIODS = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Current Month', 'Previous Month', 'Custom Date Range'];

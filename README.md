@@ -17,7 +17,7 @@ Running `setupWorkbook()` in a blank Google Sheet builds:
 
 | Folder | Contents |
 |---|---|
-| [`apps-script/`](apps-script) | `Config.gs`, `Validation.gs`, `Setup.gs`, `Triggers.gs`, `LeadEntry.gs`, `DeleteLeads.gs`, `Guide.gs`, `FollowUp.gs`, `FollowUpSidebar.html`, `Menu.gs`, `CustomFields.gs`, `DataQuality.gs`, `Dashboard.gs`, `Web.gs`, `Portal.html`, `appsscript.json` |
+| [`apps-script/`](apps-script) | `Config.gs`, `Validation.gs`, `Reset.gs`, `Setup.gs`, `Triggers.gs`, `LeadEntry.gs`, `DeleteLeads.gs`, `Guide.gs`, `FollowUp.gs`, `FollowUpSidebar.html`, `Menu.gs`, `CustomFields.gs`, `DataQuality.gs`, `Dashboard.gs`, `Web.gs`, `Portal.html`, `appsscript.json` |
 | [`docs/`](docs) | [SETUP](docs/SETUP.md) · [ADMIN](docs/ADMIN.md) · [COLUMN DICTIONARY](docs/COLUMN_DICTIONARY.md) · [CONFIDENTIALITY](docs/CONFIDENTIALITY.md) · [TESTING](docs/TESTING.md) · [TROUBLESHOOTING](docs/TROUBLESHOOTING.md) · [LIMITATIONS](docs/LIMITATIONS.md) · [Visual guide (PowerPoint)](docs/Lead_CRM_System_Guide.pptx) |
 | [`identity-app/`](identity-app) | Tiny separate sign-in app (runs as the visitor, permission: see your email only) that tells the counsellor web app who is signed in |
 | [`test/`](test) | Node.js mock of the Sheets services and scenario tests (`node test/run-mock-tests.js apps-script`) |

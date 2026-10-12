@@ -23,6 +23,7 @@ This builds the complete Call Centre Lead CRM inside a **blank Google Sheet** us
    |---|---|
    | `Config.gs` | Script → `Config` |
    | `Validation.gs` | Script → `Validation` (new in version 2) |
+   | `Reset.gs` | Script → `Reset` (new) |
    | `Setup.gs` | Script → `Setup` |
    | `Triggers.gs` | Script → `Triggers` |
    | `LeadEntry.gs` | Script → `LeadEntry` (new in version 2) |
@@ -96,6 +97,7 @@ No passwords or credentials are stored. Person-related data added by the script:
 5. **Lead CRM → Admin → Reapply protections** so the admin list takes effect.
 6. Add leads: paste them in **Lead Entry**, then **Lead CRM → Add leads from Lead Entry**.
 7. **Lead CRM → Admin → Hide admin sheets**, then **Run health check** and fix anything marked `CHECK`.
+   After testing, **Lead CRM → Admin → Reset CRM to fresh start** deletes all test leads and logs and restarts the IDs at LD-000001 ([ADMIN.md](ADMIN.md#going-live-reset-crm-to-fresh-start)).
 8. **Share the spreadsheet with counsellors as Editors.** Ask each counsellor to open **Lead CRM → My overdue follow-ups** once (this identifies them).
 
 > Counsellors work in the spreadsheet. The [counsellor web app](#7-optional-counsellor-web-app) is an optional extra. Read the trade-off in [CONFIDENTIALITY.md](CONFIDENTIALITY.md): **anyone who can edit a Google Sheet can also copy or download all of it.**

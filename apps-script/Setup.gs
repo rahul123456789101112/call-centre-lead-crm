@@ -299,7 +299,9 @@ var DEFAULT_LISTS = {
     [ACT.CORRECTION_OPENED, CATEGORY.SYSTEM, 'No'],
     [ACT.LEAD_DELETED, CATEGORY.SYSTEM, 'No'],
     [ACT.LEAD_RESTORED, CATEGORY.SYSTEM, 'No'],
-    [ACT.LEAD_PURGED, CATEGORY.SYSTEM, 'No']
+    [ACT.LEAD_PURGED, CATEGORY.SYSTEM, 'No'],
+    [ACT.CRM_RESET, CATEGORY.SYSTEM, 'No'],
+    [ACT.CRM_RESTORED, CATEGORY.SYSTEM, 'No']
   ],
   buckets: [['0-3 Days', 0, 3], ['4-7 Days', 4, 7], ['8-15 Days', 8, 15], ['16-30 Days', 16, 30], ['More Than 30 Days', 31, '']]
 };
@@ -942,6 +944,7 @@ function applyProtections_(ss) {
     [SHEET.SETTINGS, 'Lists & Settings (admins)'], [SHEET.ENTRY, 'Lead Entry (admins)'],
     [SHEET.DELETED, 'Deleted Leads (admins)'], [SHEET.START, 'Start Here (admins)'], [SHEET.GUIDE, 'Field Guide (admins)']
   ].forEach(function (x) { var sh = ss.getSheetByName(x[0]); if (sh) strict(sh.protect(), x[1]); });
+  backupSheets_().forEach(function (b) { strict(b.protect(), 'Reset backup (admins)'); });
   var dash = ss.getSheetByName(SHEET.DASHBOARD);
   var dp = strict(dash.protect(), 'Dashboard (admins)');
   dp.setUnprotectedRanges([DASH.PERIOD, DASH.CUSTOM_FROM, DASH.CUSTOM_TO, DASH.COUNSELLOR]

@@ -35,6 +35,8 @@ function onOpen(e) {
       .addItem('Restart setup from the first stage', 'restartSetup')
       .addItem('Extend Lead Management by 5,000 rows', 'extendLeadSheet')
       .addItem('Recalculate ID counters', 'recalculateIdCounters')
+      .addItem('Reset CRM to fresh start (delete all leads and logs)', 'resetCrmToFreshStart')
+      .addItem('Restore from reset backup...', 'restoreFromResetBackup')
       .addSeparator()
       .addItem('Counsellor web app link (optional)', 'showWebAppLink')
       .addItem('Web app sign-in setup', 'setupWebAppSignIn')
@@ -103,6 +105,11 @@ function showHelp() {
 
 function runHealthCheck() {
   requireAdmin_();
+  alert_('Health check (' + CRM_TITLE + ' ' + CRM_VERSION + ')\n\n' + healthCheckLines_().join('\n'));
+}
+
+/** Lines of the health check ("OK    ..." / "CHECK ..."). */
+function healthCheckLines_() {
   var ss = ss_();
   var lines = [];
   var ok = function (cond, text) { lines.push((cond ? 'OK    ' : 'CHECK ') + text); };
@@ -139,6 +146,7 @@ function runHealthCheck() {
   var props = PropertiesService.getDocumentProperties();
   var pending = props.getProperty(SETUP_STATE_KEY);
   ok(!pending, pending ? 'Setup unfinished - run Set up / repair workbook again (' + pending + ')' : 'Setup completed');
+  ok(!props.getProperty(RESET_STATE_KEY), props.getProperty(RESET_STATE_KEY) ? 'Reset unfinished - run Admin > Reset CRM to fresh start again to continue' : 'No unfinished reset');
   ok(!!props.getProperty(PROP.LEAD_SEQ), 'Lead ID counter = ' + props.getProperty(PROP.LEAD_SEQ));
   ok(!!props.getProperty(PROP.ACT_SEQ), 'Activity ID counter = ' + props.getProperty(PROP.ACT_SEQ));
   var actor = registerCurrentUser_();
@@ -150,5 +158,5 @@ function runHealthCheck() {
   ok(!unmapped.length, 'Active counsellors without email: ' + (unmapped.join(', ') || 'none'));
   ok(getSettings_().remindersEnabled === (triggers.indexOf('sendFollowUpReminders') >= 0),
     'Email reminders: ' + (getSettings_().remindersEnabled ? 'enabled' : 'disabled') + ' (trigger ' + (triggers.indexOf('sendFollowUpReminders') >= 0 ? 'present' : 'absent') + ')');
-  alert_('Health check (' + CRM_TITLE + ' ' + CRM_VERSION + ')\n\n' + lines.join('\n'));
+  return lines;
 }

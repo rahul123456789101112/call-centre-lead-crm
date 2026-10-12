@@ -24,6 +24,7 @@ Day-to-day routines for admins and counsellors are in [COLUMN_DICTIONARY.md → 
 | Admin ▸ Re-check all lead rows | Admins | Runs the edit guard over every row |
 | Admin ▸ Recalculate data-quality flags · Refresh substage dropdowns · Reapply protections | Admins | Repairs |
 | Admin ▸ Set up / repair workbook · Quick test setup · Restart setup · Extend Lead Management by 5,000 rows · Recalculate ID counters | Admins | Setup and capacity |
+| Admin ▸ Reset CRM to fresh start (delete all leads and logs) · Restore from reset backup… | Admins | Going live after testing ([below](#going-live-reset-crm-to-fresh-start)) |
 | Admin ▸ Counsellor web app link · Web app sign-in setup · Set counsellor web app URL | Admins | Optional web app |
 | Admin ▸ Enable / Disable daily email reminders · Send reminders now (test) | Admins | Reminders |
 | Admin ▸ Run health check | Admins | Checks sheets, triggers, protection, layout, queue, settings |
@@ -177,4 +178,31 @@ Counsellors work in the spreadsheet. **Any editor can copy, download or print th
 
 - **Run health check**: sheets, columns in order, header formula, sheet protection, triggers (edit guard, change, open, hourly, every-minute queue), queued follow-ups, correction window, hidden admin sheets, editable columns, identities, admin list, counsellors without email.
 - **Re-check all lead rows**: after Undo of a column change, after the CRM was busy, or after another tool changed the sheet.
-- **Resetting IDs before go-live:** delete test leads with *Delete lead(s)* and *Purge*, delete test rows from Follow-Up Log, then **Recalculate ID counters**.
+- **Before go-live:** use **Reset CRM to fresh start** (next section).
+
+## Going live: Reset CRM to fresh start
+
+**Lead CRM → Admin → Reset CRM to fresh start (delete all leads and logs)** removes all test data in one go.
+
+| Kept (not touched) | Cleared |
+|---|---|
+| Stage Master, Counsellor Master, Lists & Settings (all lists, settings, Admin Emails, Custom Fields table, Counsellor-Editable Fields, ageing buckets) | Every lead row in Lead Management (header, header formulas and the 10,000 formatted empty rows stay) |
+| Custom field names and shown / hidden columns | Lead Entry rows |
+| All formatting, validation, protections, hidden sheets, triggers | Follow-Up Log, Access Log, Deleted Leads (headers stay) |
+| Start Here, Field Guide | Dashboard numbers (refreshed: all zeros) |
+| Web app URL and sign-in settings | Data Quality Flags, Audit Snapshots, per-row substage rules of old leads |
+| Registered user identities (counsellors need not use the menu again) | Lead / Activity ID counters (next lead LD-000001, next activity ACT-000001), queued form saves, unfinished setup progress, correction window |
+
+**How it runs**
+1. Admin only (checked on the server).
+2. A summary first: "This will delete X leads and Y log entries… Stages, counsellors and settings are kept." Type **RESET** to confirm; anything else cancels and nothing is deleted.
+3. **Backup first:** every cleared sheet is copied (values) into a new hidden, admin-only sheet **"Backup <date time>"**, one block per sheet.
+   *Why not a copy of the whole file?* Copying a file needs the Google Drive permission, which this script deliberately does not have (it may only touch this spreadsheet). **File → Version history** also lets you go back to the moment before the reset.
+4. The sheets are cleared and the counters reset. One **CRM Reset** entry (who, when, counts; Activity ID `RESET`, so real activities still start at ACT-000001) is written into the empty Follow-Up Log.
+5. The health check runs and the message says **"CRM is ready to use"** (or lists what to check).
+
+**Large sheets:** the reset works in steps of 5,000 rows and saves its progress, like setup. If it says "The reset is NOT finished yet", run the same menu item again and answer Yes to continue.
+
+**Undo / backup:**
+- **Undo:** **Admin → Restore from reset backup…** puts all leads and logs back from a backup and continues the ID counters. It only works while Lead Management is still empty (right after the reset). Otherwise use **File → Version history**.
+- **Delete the backup** when you are sure: **Admin → Show admin sheets**, right-click the *Backup …* tab → **Delete**. A backup doubles the space the data uses (a spreadsheet allows 10 million cells).
