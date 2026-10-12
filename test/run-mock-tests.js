@@ -436,6 +436,76 @@ fresh(); g.setupWorkbook();
 ok(vm.runInContext('countLeads_()', g) === leadCount && cell(LM(), 'A2') === 'LD-000001' && cell(LM(), 'E1') === 'Course Interested' && logRows().length > 10, 'repair keeps leads, custom fields and log');
 ok(snap(2).v && !/Incomplete/.test(cell(LM(), 'AH2')), 'repair rebuilds snapshots without losing state');
 
+section('Reset to fresh start');
+{
+  as('admin@example.com', 'TKA');
+  // Add test data: a lead entry row and a deleted lead, so every cleared sheet has something.
+  LE().getRange('A2:Q2').setValues([entryRow('Pending Entry', '12', '', '')]);
+  const S = n => ss.getSheetByName(n);
+  const snapshotOf = n => JSON.stringify(S(n).getRange(1, 1, S(n).getLastRow(), S(n).getMaxColumns()).getValues());
+  const keep = {
+    stages: snapshotOf('Stage Master'), counsellors: snapshotOf('Counsellor Master'), settings: snapshotOf('Lists & Settings'),
+    start: snapshotOf('Start Here'), guide: snapshotOf('Field Guide'),
+    headers: JSON.stringify(LM().getRange('A1:AI1').getValues()), hidden: JSON.stringify([...LM().hidden].sort()),
+    dv: dvRule('P5') + dvRule('T5') + dvRule('E5'), v1: LM().getRange('V1').getFormula(),
+    ids: JSON.stringify(Object.keys(g._state.scriptProps).filter(k => /^UK_|^IDENTITY/.test(k)).map(k => k + '=' + g._state.scriptProps[k]).sort()),
+    triggers: M.triggers.length
+  };
+  const before = vm.runInContext('resetCounts_()', g);
+  ok(before.leads > 0 && before.log > 0, 'test data present: ' + JSON.stringify(before));
+  as('caller1@example.com', 'TK1');
+  fresh(); ok(throws(() => g.resetCrmToFreshStart(), /administrators/i), 'a counsellor cannot reset');
+  as('admin@example.com', 'TKA');
+  M.prompts.push('reset');
+  fresh(); g.resetCrmToFreshStart();
+  ok(vm.runInContext('countLeads_()', g) === before.leads && M.alerts.some(a => /Not confirmed\. Nothing was deleted/.test(a)), 'anything but RESET cancels');
+  vm.runInContext('RESET_BUDGET_MS = 1; RESET_CHUNK = 2', g);
+  M.prompts.push('RESET');
+  fresh(); g.resetCrmToFreshStart();
+  let rruns = 1;
+  while (g._state.docProps.RESET_STATE && rruns < 40) { M.confirms.push('YES'); fresh(); g.resetCrmToFreshStart(); rruns++; }
+  vm.runInContext('RESET_BUDGET_MS = 270000; RESET_CHUNK = 5000', g);
+  ok(rruns > 3 && M.alerts.some(a => /reset is NOT finished yet/.test(a)), 'large reset continues in steps (' + rruns + ' runs)');
+  const final = M.alerts[M.alerts.length - 1];
+  ok(/CRM is ready to use|health check found/.test(final) && /Deleted: \d+ leads/.test(final), 'final message after the health check');
+  if (!/CRM is ready to use/.test(final)) console.log(final);
+  ok(/CRM is ready to use/.test(final), 'health check all OK after the reset');
+  ok(vm.runInContext('countLeads_()', g) === 0 && cell(LM(), 'A2') === '' && cell(LM(), 'B3') === '' && cell(LM(), 'AI2') === '' && cell(LM(), 'AH2') === '', 'all lead rows, flags and snapshots cleared');
+  ok(LM().getMaxRows() >= 10001 && LM().getRange('Q2').getDataValidation() === null, 'pre-sized rows kept; old substage rules removed');
+  ok(LE().getLastRow() === 1 && S('Access Log').getLastRow() === 1 && S('Deleted Leads').getLastRow() === 1, 'Lead Entry, Access Log and Deleted Leads emptied (headers kept)');
+  const lr = logRows();
+  ok(lr.length === 1 && lr[0][0] === 'RESET' && lr[0][5] === 'CRM Reset' && lr[0][11] === 'admin@example.com' && /Leads: \d+/.test(lr[0][15]), 'one "CRM Reset" entry (who, when, counts) in the fresh log');
+  ok(keep.stages === snapshotOf('Stage Master') && keep.counsellors === snapshotOf('Counsellor Master') && keep.settings === snapshotOf('Lists & Settings'), 'Stage Master, Counsellor Master, Lists & Settings unchanged');
+  ok(keep.start === snapshotOf('Start Here') && keep.guide === snapshotOf('Field Guide'), 'Start Here and Field Guide unchanged');
+  ok(keep.headers === JSON.stringify(LM().getRange('A1:AI1').getValues()) && keep.hidden === JSON.stringify([...LM().hidden].sort()) && keep.v1 === LM().getRange('V1').getFormula(), 'headers, header formulas, custom names and hidden columns unchanged');
+  ok(keep.dv === dvRule('P5') + dvRule('T5') + dvRule('E5') && keep.triggers === M.triggers.length, 'validation and triggers unchanged');
+  ok(keep.ids === JSON.stringify(Object.keys(g._state.scriptProps).filter(k => /^UK_|^IDENTITY/.test(k)).map(k => k + '=' + g._state.scriptProps[k]).sort()), 'registered identities and web-app sign-in settings kept');
+  ok(lmProt() && lmProt().warn === false && (lmProt().unprot || []).length === 0, 'protection kept (no open rows while empty)');
+  const bks = vm.runInContext('backupSheets_()', g);
+  ok(bks.length === 1 && bks[0].isSheetHidden() && bks[0].getProtections('SHEET').some(p => p.warn === false), 'hidden, protected backup sheet created');
+  const bv = bks[0].getDataRange().getValues();
+  ok(bv.filter(r => r[0] === '### BACKUP OF').length === 5 && bv.some(r => r[0] === 'LD-000001'), 'backup holds all five cleared sheets');
+  fresh(); g.refreshDashboard();
+  ok(kpi('Total Leads') === 0 && kpi('Follow-Ups Completed') === 0, 'dashboard shows zeros');
+  edit('Lead Management', 'B2', 'Typed after reset');
+  ok(cell(LM(), 'B2') === '', 'the edit guard still works after the reset');
+  LE().getRange('A2:Q2').setValues([entryRow('First Real Lead', '9123456789', '', '', 'Sample Counsellor 1')]);
+  fresh(); g.addLeadsFromEntry();
+  ok(cell(LM(), 'A2') === 'LD-000001', 'next Lead ID is LD-000001');
+  fresh(); res = g.submitFollowUp({ submissionId: 'R1', leadId: 'LD-000001', outcome: 'Interested', stage: 'Interested', substage: 'Highly Interested', nextFollowUp: key(day(1)), remarks: 'first call' });
+  ok(res.ok, 'follow-up saved after the reset');
+  ok(logRows().some(r => r[0] === 'ACT-000001'), 'first numbered activity is ACT-000001');
+  // Restore is refused while leads exist; reset again, then restore the first backup.
+  fresh(); g.restoreFromResetBackup();
+  ok(M.alerts.some(a => /already holds leads/.test(a)), 'restore refused while Lead Management holds leads');
+  M.prompts.push('RESET'); fresh(); g.resetCrmToFreshStart();
+  const names = vm.runInContext('backupSheets_()', g).map(s => s.getName()).sort();
+  M.prompts.push(names[0]); M.confirms.push('YES');
+  fresh(); g.restoreFromResetBackup();
+  ok(vm.runInContext('countLeads_()', g) === before.leads && logRows().length >= before.log && logRows().some(r => r[5] === 'CRM Restored'), 'restore from backup puts leads and log back');
+  ok(g._state.docProps.LEAD_SEQ !== '0', 'counters follow the restored IDs');
+}
+
 section('Upgrade from version 1');
 {
   const ss3 = new M.Spreadsheet(); const g3 = makeCtx(ss3);

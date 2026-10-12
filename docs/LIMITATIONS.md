@@ -53,12 +53,13 @@ This CRM is built only on Google Sheets and Apps Script, owned by a personal Goo
 31. **Email reminders** depend on Google's daily mail quota (about 100 recipients/day for a personal Gmail owner).
 32. **Access Log, Follow-Up Log and Deleted Leads grow without limit.** Archive them yearly (a spreadsheet allows 10 million cells).
 33. **Setup must be run with *Run*, not *Debug*, by the owner,** and may need more than one run.
+34. **Reset to fresh start** backs up into a sheet of the same file (the script has no Drive permission to copy the file). The backup doubles the space used until it is deleted. *Restore from reset backup* only works while the CRM is empty and runs in one go (very large logs could hit the 6-minute limit; then use File → Version history).
 
 ## What was verified, and how
 
 The code was written without access to a live Google Sheets environment.
 - Every `.gs` file and the scripts in both HTML files were syntax-checked with Node.js.
-- An in-memory imitation of the Sheets/Apps Script services ran **151 scenario checks** (`node test/run-mock-tests.js apps-script`, TESTING.md). They cover setup and upgrade, Lead Entry, every "careless user" case in TESTING.md, the edit guard for counsellors / admins / owner, the correction window, column-layout detection, the follow-up form and its queue, delete / restore / purge, the dashboard numbers, the web app and its sign-in, and identity hand-off.
+- An in-memory imitation of the Sheets/Apps Script services ran **177 scenario checks** (`node test/run-mock-tests.js apps-script`, TESTING.md). They cover setup and upgrade, Lead Entry, every "careless user" case in TESTING.md, the edit guard for counsellors / admins / owner, the correction window, column-layout detection, the follow-up form and its queue, delete / restore / purge, the dashboard numbers, the web app and its sign-in, and identity hand-off.
 - **Not verified in a real spreadsheet:**
   - how fast the guard reverts in practice, and what Google's protected-cell message looks like;
   - that Google fires `onEdit` for undo, fill-down and multi-range pastes exactly as assumed, and onChange for every column change;

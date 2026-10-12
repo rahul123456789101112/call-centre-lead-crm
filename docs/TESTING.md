@@ -153,24 +153,40 @@ Run these in a **copy** of the CRM (**File → Make a copy**) or before go-live,
 | K4 | Counsellor A | Change Stage | Substage emptied, lead Incomplete; log a follow-up with all fields: complete again |
 | K5 | Admin | Deactivate Counsellor A; Counsellor A clicks anything | "Access denied" |
 
-## L. Speed and quota
+## L. Reset CRM to fresh start (going live)
+
+| # | Role | Steps | Expected |
+|---|---|---|---|
+| L1 | Admin | Note the contents of Stage Master, Counsellor Master, Lists & Settings (incl. Admin Emails, Custom Fields, Counsellor-Editable Fields), the custom headers and hidden columns, Start Here, Field Guide; Apps Script → Triggers; web-app link | (reference) |
+| L2 | Admin | Add 5 test leads in Lead Entry, log 3 follow-ups, delete one lead, leave one row in Lead Entry | Test data in every sheet |
+| L3 | Counsellor A | Admin → Reset CRM to fresh start | "Only CRM administrators can do this." |
+| L4 | Admin | Reset CRM to fresh start; type `reset` (lower case) | "Not confirmed. Nothing was deleted." |
+| L5 | Admin | Reset again: the summary shows the right numbers of leads and log entries; type `RESET` | Message "CRM is ready to use" with the counts and how to restore / delete the backup |
+| L6 | Admin | Look at the sheets | Lead Management: header and formulas, no leads, 10,000 empty formatted rows; Lead Entry, Access Log, Deleted Leads empty; Follow-Up Log has exactly one row "CRM Reset" (who, when, counts); Dashboard shows zeros |
+| L7 | Admin | Compare with M1 | Everything under KEEP is unchanged; counsellors can edit without using the menu again |
+| L8 | Admin | Show admin sheets | A hidden, protected sheet "Backup <date time>" holds the old leads and logs |
+| L9 | Admin | Add a lead in Lead Entry and log a follow-up | Lead ID LD-000001; first numbered activity ACT-000001 |
+| L10 | Admin | Restore from reset backup… | Refused while leads exist ("use File > Version history"). After another reset: restores the old leads and logs, IDs continue after the highest restored ID, "CRM Restored" logged |
+| L11 | Owner | With 10,000 test leads, run the reset | Finishes, or says "NOT finished yet" and finishes when run again |
+
+## M. Speed and quota
 
 | # | Steps | Expected |
 |---|---|---|
-| L1 | With 1,000+ leads, change Stage on several rows quickly | The Substage dropdown is right when you click it; typing is not delayed |
-| L2 | Apps Script → Executions | `onEdit` well under a second; `onEditInstallable` typically 1–3 s; `processQueuedFollowUps` under a second when idle |
-| L3 | After a normal working day, Apps Script → Executions | Total trigger time well below 90 minutes (personal-account quota, LIMITATIONS.md 16) |
+| M1 | With 1,000+ leads, change Stage on several rows quickly | The Substage dropdown is right when you click it; typing is not delayed |
+| M2 | Apps Script → Executions | `onEdit` well under a second; `onEditInstallable` typically 1–3 s; `processQueuedFollowUps` under a second when idle |
+| M3 | After a normal working day, Apps Script → Executions | Total trigger time well below 90 minutes (personal-account quota, LIMITATIONS.md 16) |
 
 ---
 
 ## Automated pre-release check (developers)
 
-[`test/`](../test) has an in-memory imitation of the Sheets / Apps Script services and 151 scenario checks:
+[`test/`](../test) has an in-memory imitation of the Sheets / Apps Script services and 177 scenario checks:
 
 ```
 node test/run-mock-tests.js apps-script
 ```
 
-It covers: staged and quick setup, sheet visibility and protection, strict validation rules, custom fields with Allowed Values; Lead Entry (valid, invalid, duplicates Warn/Block, counsellor refused); the careless-user cases D1–D14 (text in a date cell, past / far dates, junk pasted over six columns with dropdowns restored, clearing cells, locked and system columns, empty rows, a lead typed directly, another counsellor's lead, formulas, over-long remarks, wrong substage, fill-down, undo, Converted without stage, unknown editor); admin and owner rules, the correction window, header restore; column insert / move detection and Re-check; the follow-up form (required fields, own leads only, the two-step counsellor save and its queue, duplicate saves, admin save); My overdue follow-ups; delete / restore / purge; dashboard Incomplete KPI and per-counsellor column, counsellor refresh; settings (Counsellor-Editable Fields); the web app and its sign-in; identity hand-off; maintenance, health check, reminders, repair and the upgrade from version 1.
+It covers: staged and quick setup, sheet visibility and protection, strict validation rules, custom fields with Allowed Values; Lead Entry (valid, invalid, duplicates Warn/Block, counsellor refused); the careless-user cases D1–D14 (text in a date cell, past / far dates, junk pasted over six columns with dropdowns restored, clearing cells, locked and system columns, empty rows, a lead typed directly, another counsellor's lead, formulas, over-long remarks, wrong substage, fill-down, undo, Converted without stage, unknown editor); admin and owner rules, the correction window, header restore; column insert / move detection and Re-check; the follow-up form (required fields, own leads only, the two-step counsellor save and its queue, duplicate saves, admin save); My overdue follow-ups; delete / restore / purge; dashboard Incomplete KPI and per-counsellor column, counsellor refresh; settings (Counsellor-Editable Fields); the web app and its sign-in; identity hand-off; maintenance, health check, reminders, repair; the reset to fresh start (admin only, RESET confirmation, staged run, backup, everything under KEEP unchanged, IDs restarting at 000001, restore); and the upgrade from version 1.
 
 It cannot evaluate Google Sheets formulas, enforce real protection, show the calendar picker or measure trigger timing. The manual tests above are the acceptance criteria.

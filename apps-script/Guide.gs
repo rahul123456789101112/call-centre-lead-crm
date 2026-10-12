@@ -135,12 +135,14 @@ function hideAdminSheets_() {
   var active = ss.getActiveSheet();
   if (active && ADMIN_SHEETS.indexOf(active.getName()) >= 0) ss.setActiveSheet(ss.getSheetByName(SHEET.START) || ss.getSheetByName(SHEET.LEADS));
   ADMIN_SHEETS.forEach(function (n) { var s = ss.getSheetByName(n); if (s && !s.isSheetHidden()) s.hideSheet(); });
+  backupSheets_().forEach(function (s) { if (!s.isSheetHidden()) s.hideSheet(); });
 }
 
 /** Lead CRM > Admin > Show admin sheets. */
 function showAdminSheets() {
   requireAdmin_();
   ADMIN_SHEETS.forEach(function (n) { if (ss_().getSheetByName(n)) showSheet_(n); });
+  backupSheets_().forEach(function (s) { if (s.isSheetHidden()) s.showSheet(); });
   toast_('Admin sheets are visible. Hide them again with Lead CRM > Admin > Hide admin sheets.');
 }
 

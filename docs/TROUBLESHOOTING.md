@@ -14,6 +14,8 @@ Start with **Lead CRM → Admin → Run health check**. Errors of triggers are l
 | Setup repeats the same stage | That stage alone takes over 6 minutes | *Admin → Restart setup from the first stage*, close other tabs, try the quick test, report the slow stage from the execution log |
 | `Sheet "…" is missing` | A CRM sheet was renamed or deleted | Rename it back, or run *Set up / repair workbook* |
 | I cannot find Lead Entry / Stage Master / Lists & Settings | Admin sheets are hidden | *Lead CRM → Admin → Show admin sheets* |
+| "The reset is NOT finished yet" | Large sheets, 6-minute limit | Run *Admin → Reset CRM to fresh start* again and answer Yes |
+| Restore from reset backup: "already holds leads" | Leads were added after the reset | Use File → Version history, or delete the new leads first |
 
 ## "My change was undone"
 
