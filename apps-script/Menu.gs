@@ -19,11 +19,15 @@ function onOpen(e) {
       .addSeparator()
       .addItem('Clear view filters', 'viewClear'))
     .addItem('Refresh Dashboard', 'refreshDashboard')
+    .addItem('Add custom field...', 'addCustomField')
+    .addItem('Remove custom field...', 'removeCustomField')
     .addItem('Refresh substage dropdowns', 'refreshAllSubstageValidations')
     .addItem('Identify me', 'identifyMe')
     .addSeparator()
     .addSubMenu(ui.createMenu('Admin')
-      .addItem('Set up / repair workbook', 'setupWorkbook')
+      .addItem('Set up / repair workbook (10,000 rows)', 'setupWorkbook')
+      .addItem('Quick test setup (1,000 rows)', 'setupWorkbookQuickTest')
+      .addItem('Restart setup from the first stage', 'restartSetup')
       .addItem('Process imported / pasted leads', 'processAllLeads')
       .addItem('Extend Lead Management by 5,000 rows', 'extendLeadSheet')
       .addItem('Reapply protections', 'reapplyProtections')
@@ -73,10 +77,10 @@ function leadFilter_() {
 }
 
 function formulaCriteria_(formula) {
-  return SpreadsheetApp.newFilterCriteria().whenFormulaSatisfied(formula).build();
+  return SpreadsheetApp.newFilterCriteria().whenFormulaSatisfied(lcf_(formula)).build();
 }
 
-var OPEN_FILTER_FORMULA = '=AND($AB2<>"Converted",$AB2<>"Lost",$AB2<>"Duplicate")';
+var OPEN_FILTER_FORMULA = '=AND(${STATUS}2<>"Converted",${STATUS}2<>"Lost",${STATUS}2<>"Duplicate")';
 
 function viewMyDueFollowUps() {
   var actor = registerCurrentUser_();
@@ -87,21 +91,21 @@ function viewMyDueFollowUps() {
   }
   var f = leadFilter_();
   f.setColumnFilterCriteria(LC.OWNER, SpreadsheetApp.newFilterCriteria().whenTextEqualTo(actor.name).build());
-  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER($J2),INT($J2)<=TODAY())'));
+  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)<=TODAY())'));
   f.setColumnFilterCriteria(LC.STATUS, formulaCriteria_(OPEN_FILTER_FORMULA));
   toast_('Showing follow-ups due today or overdue for ' + actor.name + '.');
 }
 
 function viewOverdue() {
   var f = leadFilter_();
-  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER($J2),$J2<TODAY())'));
+  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER(${NEXT_FU}2),${NEXT_FU}2<TODAY())'));
   f.setColumnFilterCriteria(LC.STATUS, formulaCriteria_(OPEN_FILTER_FORMULA));
   toast_('Showing overdue follow-ups (open leads).');
 }
 
 function viewDueToday() {
   var f = leadFilter_();
-  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER($J2),INT($J2)=TODAY())'));
+  f.setColumnFilterCriteria(LC.NEXT_FU, formulaCriteria_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)=TODAY())'));
   f.setColumnFilterCriteria(LC.STATUS, formulaCriteria_(OPEN_FILTER_FORMULA));
   toast_('Showing follow-ups due today.');
 }
@@ -169,9 +173,13 @@ function runHealthCheck() {
   var leads = ss.getSheetByName(SHEET.LEADS);
   if (leads) {
     ok(str_(leads.getRange(1, LC.ID).getValue()) === 'Lead ID', 'Lead Management A1 = "Lead ID" (columns not moved)');
+    ok(same_(leads.getRange(1, LC.OWNER).getValue(), 'Assigned Counsellor'), 'Lead Management ' + colLetter_(LC.OWNER) + '1 = "Assigned Counsellor" (current column layout)');
+    var cfs = readCustomFields_().filter(function (f) { return f.active; });
+    ok(true, 'Active custom fields: ' + (cfs.map(function (f) { return f.name + ' (' + colLetter_(customCol_(f.slot)) + ')'; }).join(', ') || 'none'));
     ok(/^=/.test(leads.getRange(1, LC.FU_COUNT).getFormula()), 'Follow-Up Count header formula present (L1)');
     ok(/^=/.test(leads.getRange(1, LC.DQ_FLAGS).getFormula()), 'Data Quality header formula present (AH1)');
-    ok(leads.getMaxRows() - 1 >= LEAD_DATA_ROWS, 'Lead Management has ' + (leads.getMaxRows() - 1) + ' data rows');
+    var target = parseInt(PropertiesService.getDocumentProperties().getProperty(SETUP_ROWS_KEY), 10) || LEAD_DATA_ROWS;
+    ok(leads.getMaxRows() - 1 >= target, 'Lead Management has ' + (leads.getMaxRows() - 1) + ' data rows (setup target ' + target + ')');
     ok(!!leads.getFilter(), 'Filter enabled on Lead Management');
   }
   Object.keys(NAMED).forEach(function (k) { ok(!!ss.getRangeByName(NAMED[k].name), 'Named range ' + NAMED[k].name); });
@@ -180,6 +188,8 @@ function runHealthCheck() {
   var mode = getEditMode_();
   ok(mode === 'simple' || triggers.indexOf('onEditInstallable') >= 0, 'Edit tracking mode: ' + mode);
   var props = PropertiesService.getDocumentProperties();
+  var pending = props.getProperty(SETUP_STATE_KEY);
+  ok(!pending, pending ? 'Setup unfinished - run Set up / repair workbook again (' + pending + ')' : 'Setup completed');
   ok(!!props.getProperty(PROP.LEAD_SEQ), 'Lead ID counter = ' + props.getProperty(PROP.LEAD_SEQ));
   ok(!!props.getProperty(PROP.ACT_SEQ), 'Activity ID counter = ' + props.getProperty(PROP.ACT_SEQ));
   var actor = registerCurrentUser_();

@@ -27,49 +27,149 @@ var COLORS = {
 /* Entry point                                                         */
 /* ================================================================== */
 
+/*
+ * Setup runs in resumable stages. Progress is saved in Document Properties after every stage;
+ * a run stops before the time budget is used up and the next run continues where it left off.
+ * Every stage is idempotent, so re-running a stage that was interrupted is safe.
+ */
+var SETUP_STATE_KEY = 'SETUP_STATE';
+var SETUP_ROWS_KEY = 'SETUP_ROWS';
+var QUICK_TEST_ROWS = 1000;
+/** Time budget per execution (Apps Script hard limit is 6 minutes). */
+var SETUP_BUDGET_MS = 270000;
+
+/** [name, function(ctx), estimated seconds for 10,000 rows] */
+var SETUP_STAGES = [
+  ['Create sheets', function (c) { ensureSheets_(c.ss); }, 10],
+  ['Lists & Settings', function (c) {
+    var sh = c.ss.getSheetByName(SHEET.SETTINGS);
+    setupSettingsSheet_(sh, c.me);
+    createNamedRanges_(c.ss, sh);
+  }, 20],
+  ['Stage Master & Counsellor Master', function (c) {
+    setupStageMaster_(c.ss.getSheetByName(SHEET.STAGES));
+    setupCounsellorMaster_(c.ss.getSheetByName(SHEET.COUNSELLORS));
+  }, 20],
+  ['Lead Management layout', function (c) { setupLeadSheetLayout_(c.ss.getSheetByName(SHEET.LEADS), c.rows); }, 40],
+  ['Lead Management validation & colours', function (c) {
+    applyLeadSheetRules_(c.ss.getSheetByName(SHEET.LEADS));
+    refreshAllSubstageValidations_();   // rows that already hold leads only
+  }, 60],
+  ['Follow-Up Log', function (c) { setupLogSheet_(c.ss.getSheetByName(SHEET.LOG), c.rows); }, 30],
+  ['Lead Management formulas', function (c) { setupLeadFormulas_(c.ss.getSheetByName(SHEET.LEADS)); }, 30],
+  ['Dashboard reports', function (c) { setupDashboard_(c.ss.getSheetByName(SHEET.DASHBOARD)); }, 90],
+  ['Dashboard charts', function (c) { refreshDashboardCharts_(); }, 30],
+  ['Protections & triggers', function (c) {
+    applyProtections_(c.ss);
+    installCoreTriggers_(c.ss);
+    initCounters_();
+    removeDefaultSheets_(c.ss);
+  }, 40]
+];
+
+/** Full build / repair with 10,000 lead rows (continues an unfinished setup). */
 function setupWorkbook() {
+  runSetup_(null);
+}
+
+/** Quick build with 1,000 lead rows for testing (Admin menu or run from the editor). */
+function setupWorkbookQuickTest() {
+  runSetup_(QUICK_TEST_ROWS);
+}
+
+/** Forgets saved progress so the next setup run starts from stage 1 (data is not touched). */
+function restartSetup() {
+  PropertiesService.getDocumentProperties().deleteProperty(SETUP_STATE_KEY);
+  notify_('Setup progress cleared. Run Set up / repair workbook again to start from the first stage.');
+}
+
+function runSetup_(rowsOverride) {
+  var t0 = Date.now();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var firstRun = !ss.getSheetByName(SHEET.LEADS) || !ss.getSheetByName(SHEET.SETTINGS);
-  if (!firstRun) requireAdmin_();
+  var props = PropertiesService.getDocumentProperties();
+  var state = null;
+  try { state = JSON.parse(props.getProperty(SETUP_STATE_KEY) || 'null'); } catch (e) { state = null; }
+  if (!state) {
+    var firstRun = !ss.getSheetByName(SHEET.LEADS) || !ss.getSheetByName(SHEET.SETTINGS);
+    if (!firstRun) requireAdmin_();
+    state = { next: 0, firstRun: firstRun, rows: LEAD_DATA_ROWS, started: new Date().toISOString() };
+  } else if (!state.firstRun) {
+    requireAdmin_();
+  }
+  if (rowsOverride) state.rows = rowsOverride;
+  props.setProperty(SETUP_ROWS_KEY, String(state.rows));
+
   var me = '';
   try { me = Session.getEffectiveUser().getEmail(); } catch (e) { /* ignore */ }
+  var ctx = { ss: ss, me: me, rows: state.rows };
+  var budget = SETUP_BUDGET_MS;
+  var total = SETUP_STAGES.length;
+  var scale = Math.max(state.rows / LEAD_DATA_ROWS, 0.2);
 
   var lock = LockService.getDocumentLock();
   lock.waitLock(30000);
   try {
-    clearMemo_();
-    ss.toast('Creating sheets...', CRM_TITLE, 60);
-    var sh = ensureSheets_(ss);
-    setupSettingsSheet_(sh.settings, me);
-    createNamedRanges_(ss, sh.settings);
-    clearMemo_();
-    setupStageMaster_(sh.stages);
-    setupCounsellorMaster_(sh.counsellors);
-    SpreadsheetApp.flush();
-    ss.toast('Formatting Lead Management (10,000 rows)...', CRM_TITLE, 60);
-    setupLeadSheet_(sh.leads);
-    setupLogSheet_(sh.log);
-    SpreadsheetApp.flush();
-    ss.toast('Building dashboard...', CRM_TITLE, 60);
-    setupDashboard_(sh.dashboard);
-    SpreadsheetApp.flush();
-    applyProtections_(ss);
-    installCoreTriggers_(ss);
-    initCounters_();
-    removeDefaultSheets_(ss);
-    PropertiesService.getDocumentProperties().setProperty('CRM_VERSION', CRM_VERSION);
-    ss.setActiveSheet(sh.leads);
-    clearMemo_();
+    while (state.next < total) {
+      var stage = SETUP_STAGES[state.next];
+      var elapsed = Date.now() - t0;
+      // Always run at least one stage per execution; otherwise only start a stage that should fit.
+      if (state.ranThisExecution && elapsed + stage[2] * 1000 * scale > budget) break;
+      ss.toast('Stage ' + (state.next + 1) + ' of ' + total + ': ' + stage[0] + '...', CRM_TITLE, 120);
+      var s0 = Date.now();
+      clearMemo_();
+      stage[1](ctx);
+      SpreadsheetApp.flush();
+      console.log('Setup stage ' + (state.next + 1) + '/' + total + ' "' + stage[0] + '" took ' +
+        Math.round((Date.now() - s0) / 1000) + ' s (rows: ' + state.rows + ')');
+      state.next++;
+      state.ranThisExecution = true;
+      var save = JSON.parse(JSON.stringify(state));
+      delete save.ranThisExecution;
+      props.setProperty(SETUP_STATE_KEY, JSON.stringify(save));
+    }
   } finally {
     lock.releaseLock();
   }
-  alert_('Lead CRM ' + (firstRun ? 'created' : 'repaired') + '.\n\n' +
+
+  if (state.next < total) {
+    var msg = 'Setup is NOT finished yet: completed ' + state.next + ' of ' + total + ' stages in ' +
+      Math.round((Date.now() - t0) / 1000) + ' s.\n\n' +
+      'Run it again (Lead CRM > Admin > Set up / repair workbook, or Run > setupWorkbook in the editor) ' +
+      'to continue from stage ' + (state.next + 1) + ': "' + SETUP_STAGES[state.next][0] + '".';
+    notify_(msg);
+    return;
+  }
+
+  props.deleteProperty(SETUP_STATE_KEY);
+  props.setProperty('CRM_VERSION', CRM_VERSION);
+  ss.setActiveSheet(ss.getSheetByName(SHEET.LEADS));
+  clearMemo_();
+  var done = 'Lead CRM ' + (state.firstRun ? 'created' : 'repaired') + ' with ' + state.rows.toLocaleString() +
+    ' lead rows.\n\n' +
     'Next steps:\n' +
-    '1. Replace the SAMPLE rows in Stage Master and Counsellor Master with your own.\n' +
-    '2. Add each counsellor\'s Google account email in Counsellor Master (used to identify users).\n' +
-    '3. Add administrator emails in Lists & Settings > "' + SET.ADMINS + '", then run Lead CRM > Admin > Reapply protections.\n' +
-    '4. Share the spreadsheet with callers as Editors. Each caller opens Lead CRM > Log Follow-Up once to authorise.\n\n' +
-    'See docs/SETUP.md for details.');
+    '1. Reload the spreadsheet tab to see the Lead CRM menu.\n' +
+    '2. Replace the SAMPLE rows in Stage Master and Counsellor Master with your own.\n' +
+    '3. Add each counsellor\'s Google account email in Counsellor Master (used to identify users).\n' +
+    '4. Add administrator emails in Lists & Settings > "' + SET.ADMINS + '", then run Lead CRM > Admin > Reapply protections.\n' +
+    '5. Share the spreadsheet with callers as Editors. Each caller opens Lead CRM > Log Follow-Up once to authorise.\n\n' +
+    'See docs/SETUP.md for details.';
+  notify_(done);
+}
+
+/**
+ * Non-blocking message: a modeless dialog in the spreadsheet plus the execution log.
+ * (ui.alert would pause the script until someone clicks OK in the spreadsheet tab, which can
+ * use up the whole execution time when setup is started from the Apps Script editor.)
+ */
+function notify_(msg) {
+  console.log(msg);
+  try {
+    var html = HtmlService.createHtmlOutput('<div style="font-family:Roboto,Arial;font-size:13px;white-space:pre-wrap;line-height:1.45">' +
+      String(msg).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</div>').setWidth(520).setHeight(320);
+    SpreadsheetApp.getUi().showModelessDialog(html, CRM_TITLE);
+  } catch (e) {
+    toast_(String(msg).split('\n')[0], 15);
+  }
 }
 
 function alert_(msg) {
@@ -173,7 +273,7 @@ var DEFAULT_LISTS = {
 };
 
 function setupSettingsSheet_(sh, me) {
-  ensureSize_(sh, 200, LS.H_PAIRS + 1);
+  ensureSize_(sh, 200, LS.CF_ACTIVE);
   var headers = {};
   headers[LS.PRIORITY] = 'Lead Priority';
   headers[LS.OUTCOME] = 'Contact Outcome';
@@ -196,7 +296,9 @@ function setupSettingsSheet_(sh, me) {
   headers[LS.H_PERIODS] = 'Reporting Periods (auto)';
   headers[LS.H_PAIRS] = 'Stage (auto)';
   headers[LS.H_PAIRS + 1] = 'Substage (auto)';
-  Object.keys(headers).forEach(function (c) { sh.getRange(1, parseInt(c, 10)).setValue(headers[c]); });
+  var headerRow = [];
+  for (var hc = 1; hc <= LS.H_PAIRS + 1; hc++) headerRow.push(headers[hc] || '');
+  sh.getRange(1, 1, 1, headerRow.length).setValues([headerRow]);
 
   var isEmpty = !str_(sh.getRange(2, LS.PRIORITY).getValue()) && !str_(sh.getRange(2, LS.SET_KEY).getValue());
   if (isEmpty) {
@@ -225,11 +327,10 @@ function setupSettingsSheet_(sh, me) {
   // Setting values with fixed choices get a dropdown.
   var lastSet = Math.max(sh.getLastRow(), 2);
   var keyVals = sh.getRange(2, LS.SET_KEY, lastSet - 1, 1).getValues();
-  keyVals.forEach(function (r, i) {
+  sh.getRange(2, LS.SET_VALUE, keyVals.length, 1).setDataValidations(keyVals.map(function (r) {
     var def = DEFAULT_SETTINGS.filter(function (d) { return same_(d[0], r[0]); })[0];
-    var cell = sh.getRange(i + 2, LS.SET_VALUE);
-    if (def && def[3]) cell.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(def[3], true).setAllowInvalid(false).build());
-  });
+    return [def && def[3] ? SpreadsheetApp.newDataValidation().requireValueInList(def[3], true).setAllowInvalid(false).build() : null];
+  }));
 
   // Auto-calculated helper lists used by dropdowns and the dashboard. Do not edit.
   var smB = "'Stage Master'!B2:B", smC = "'Stage Master'!C2:C", smE = "'Stage Master'!E2:E", smF = "'Stage Master'!F2:F";
@@ -257,9 +358,13 @@ function setupSettingsSheet_(sh, me) {
   styleHeader_(sh.getRange(1, LS.BUCKET_LABEL, 1, 3), COLORS.teal);
   styleHeader_(sh.getRange(1, LS.SET_KEY, 1, 3), COLORS.headerCustom);
   styleHeader_(sh.getRange(1, LS.H_ACTIVE_STAGES, 1, 7), COLORS.headerSystem);
+  setupCustomFieldTable_(sh);
+  styleHeader_(sh.getRange(1, LS.CF_SLOT, 1, 3), COLORS.headerCustom);
   sh.getRange(2, LS.H_ACTIVE_STAGES, sh.getMaxRows() - 1, 7).setBackground('#F2F3F4').setFontColor('#566573');
   sh.setRowHeight(1, 40);
-  for (var c = 1; c <= LS.H_PAIRS + 1; c++) sh.setColumnWidth(c, 140);
+  sh.setColumnWidths(1, LS.CF_ACTIVE, 140);
+  sh.setColumnWidth(LS.CF_SLOT - 1, 24);
+  sh.setColumnWidth(LS.CF_NAME, 200);
   [9, 13, 17].forEach(function (c) { sh.setColumnWidth(c, 24); });
   sh.setColumnWidth(LS.SET_KEY, 260);
   sh.setColumnWidth(LS.SET_VALUE, 200);
@@ -372,75 +477,88 @@ function formatMasterSheet_(sh, width, widths) {
 /* Lead Management                                                     */
 /* ================================================================== */
 
-function setupLeadSheet_(sh) {
-  ensureSize_(sh, LEAD_DATA_ROWS + 1, LEAD_COLS);
-  var existing = sh.getRange(1, 1, 1, LEAD_COLS).getValues()[0];
+/** Headers, header colours, number formats, widths and notes (no formulas, no validation). */
+function setupLeadSheetLayout_(sh, dataRows) {
+  ensureSize_(sh, (dataRows || LEAD_DATA_ROWS) + 1, LEAD_COLS);
+  migrateOldCustomFieldLayout_(sh);
+  var header = sh.getRange(1, 1, 1, LEAD_COLS);
+  var existing = header.getValues()[0];
   var headers = LEAD_HEADERS.map(function (h, i) {
     var c = i + 1;
-    // Keep custom field names an administrator has already set.
-    if (c >= LC.CUSTOM_FIRST && c <= LC.CUSTOM_LAST && str_(existing[i])) return existing[i];
+    // Custom field headers come from the Custom Fields table (applyCustomFields_ below);
+    // formula headers are written in a later stage.
+    if (c >= LC.CUSTOM_FIRST && c <= LC.CUSTOM_LAST) return str_(existing[i]) || h;
+    if (LEAD_FORMULA_COLS.indexOf(c) >= 0) return existing[i] === '' ? h : existing[i];
     return h;
   });
-  sh.getRange(1, 1, 1, LEAD_COLS).setValues([headers]);
-  var formulas = leadHeaderFormulas_();
-  sh.getRange(1, LC.FU_COUNT).setFormula(formulas.fuCount);
-  sh.getRange(1, LC.ACTIVITY_TOTAL).setFormula(formulas.activityTotal);
-  sh.getRange(1, LC.DQ_FLAGS).setFormula(formulas.dq);
+  // Formula header cells may already hold a formula (repair run): only write plain-text headers.
+  var formulasNow = header.getFormulas()[0];
+  if (formulasNow.some(function (f) { return f; })) {
+    var runs = [[1, LC.FU_COUNT - 1], [LC.FU_COUNT + 1, LC.ACTIVITY_TOTAL - 1], [LC.SNAPSHOT, LC.SNAPSHOT]];
+    runs.forEach(function (r) { sh.getRange(1, r[0], 1, r[1] - r[0] + 1).setValues([headers.slice(r[0] - 1, r[1])]); });
+  } else {
+    header.setValues([headers]);
+  }
 
-  // Header colours: user fields / system / formula / custom
-  styleHeader_(sh.getRange(1, 1, 1, LEAD_COLS), COLORS.headerUser);
-  LEAD_SYSTEM_COLS.forEach(function (c) { sh.getRange(1, c).setBackground(COLORS.headerSystem); });
-  LEAD_FORMULA_COLS.forEach(function (c) { sh.getRange(1, c).setBackground(COLORS.headerFormula); });
-  sh.getRange(1, LC.CUSTOM_FIRST, 1, 10).setBackground(COLORS.headerCustom);
+  // Header colours in one call: user fields / system / formula / custom
+  styleHeader_(header, COLORS.headerUser);
+  var bg = [];
+  for (var c = 1; c <= LEAD_COLS; c++) {
+    bg.push(LEAD_FORMULA_COLS.indexOf(c) >= 0 ? COLORS.headerFormula
+      : LEAD_SYSTEM_COLS.indexOf(c) >= 0 ? COLORS.headerSystem
+      : (c >= LC.CUSTOM_FIRST && c <= LC.CUSTOM_LAST) ? COLORS.headerCustom : COLORS.headerUser);
+  }
+  header.setBackgrounds([bg]);
   sh.setRowHeight(1, 48);
   sh.setFrozenRows(1);
   sh.setFrozenColumns(2);
 
+  // One call per column range (never per row).
   var rows = sh.getMaxRows() - 1;
   var col = function (c, n) { return sh.getRange(2, c, rows, n || 1); };
   col(LC.ID).setFontWeight('bold').setFontColor(COLORS.navy);
   col(LC.MOBILE).setNumberFormat('@');
-  col(LC.LAST_CONTACT).setNumberFormat('dd-mmm-yyyy');
-  col(LC.NEXT_FU).setNumberFormat('dd-mmm-yyyy');
+  col(LC.LAST_CONTACT, 2).setNumberFormat('dd-mmm-yyyy');                // I:J
   col(LC.FU_COUNT).setNumberFormat('0').setHorizontalAlignment('center');
   col(LC.LAST_ACTIVITY).setNumberFormat('dd-mmm-yyyy hh:mm');
   col(LC.CREATED).setNumberFormat('dd-mmm-yyyy hh:mm');
   col(LC.LAST_FU_DATE).setNumberFormat('dd-mmm-yyyy');
-  col(LC.STAGE_CHANGED).setNumberFormat('dd-mmm-yyyy hh:mm');
-  col(LC.ASSIGNED_DATE).setNumberFormat('dd-mmm-yyyy hh:mm');
+  col(LC.STAGE_CHANGED, 2).setNumberFormat('dd-mmm-yyyy hh:mm');         // AD:AE
   col(LC.ACTIVITY_TOTAL).setNumberFormat('0').setHorizontalAlignment('center');
-  col(LC.DQ_FLAGS).setWrap(false);
-  col(LC.REMARKS).setWrap(false);
 
+  sh.setColumnWidths(1, LEAD_COLS, 120);
   var widths = {};
-  widths[LC.ID] = 100; widths[LC.NAME] = 170; widths[LC.MOBILE] = 120; widths[LC.EMAIL] = 190;
-  widths[LC.OWNER] = 160; widths[LC.STAGE] = 130; widths[LC.SUBSTAGE] = 170; widths[LC.PRIORITY] = 80;
-  widths[LC.REMARKS] = 240; widths[LC.DQ_FLAGS] = 260; widths[LC.UPDATED_BY] = 170; widths[LC.LAST_ACTIVITY] = 140;
-  for (var c = 1; c <= LEAD_COLS; c++) sh.setColumnWidth(c, widths[c] || 120);
+  widths[LC.ID] = 100; widths[LC.NAME] = 170; widths[LC.EMAIL] = 190; widths[LC.OWNER] = 160;
+  widths[LC.SUBSTAGE] = 170; widths[LC.PRIORITY] = 80; widths[LC.REMARKS] = 240; widths[LC.DQ_FLAGS] = 260;
+  widths[LC.UPDATED_BY] = 170; widths[LC.LAST_ACTIVITY] = 140;
+  Object.keys(widths).forEach(function (k) { sh.setColumnWidth(parseInt(k, 10), widths[k]); });
   sh.hideColumns(LC.SNAPSHOT);
-
   addLeadHeaderNotes_(sh);
-  applyLeadSheetRules_(sh);
-  refreshAllSubstageValidations_();
+  applyCustomFields_();   // header names + hide inactive slots (data is never touched)
+}
+
+/** Header-row ARRAYFORMULAs (L1, AG1, AH1). Written in their own stage because they trigger recalculation. */
+function setupLeadFormulas_(sh) {
+  var f = leadHeaderFormulas_();
+  sh.getRange(1, LC.FU_COUNT).setFormula(f.fuCount);
+  sh.getRange(1, LC.ACTIVITY_TOTAL, 1, 2).setFormulas([[f.activityTotal, f.dq]]);
 }
 
 function leadHeaderFormulas_() {
   var log = "'Follow-Up Log'!B2:M";
-  var open = '((AB2:AB<>"Converted")*(AB2:AB<>"Lost")*(AB2:AB<>"Duplicate"))';
+  var open = lcf_('(({STATUS}2:{STATUS}<>"Converted")*({STATUS}2:{STATUS}<>"Lost")*({STATUS}2:{STATUS}<>"Duplicate"))');
   var sm = function (c) { return "'Stage Master'!" + c + '2:' + c; };
-  var dq = '={"Data Quality Flags";ARRAYFORMULA(IF(A2:A="",,REGEXREPLACE(' +
-    'IF(C2:C="","Missing mobile; ",IF(REGEXMATCH(TO_TEXT(C2:C),SET_MOBILE_PATTERN),"","Invalid mobile format; "))' +
-    '&IF((SET_DUP_MOBILE<>"Off")*(C2:C<>""),IF(COUNTIF(C2:C,C2:C)>1,"Duplicate mobile; ",""),"")' +
-    '&IF(D2:D="","",IF(REGEXMATCH(TO_TEXT(D2:D),"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"),"","Invalid email; "))' +
-    '&IF((SET_DUP_EMAIL<>"Off")*(D2:D<>""),IF(COUNTIF(D2:D,D2:D)>1,"Duplicate email; ",""),"")' +
-    '&IF(E2:E="","Unassigned; ",IF(COUNTIF(\'Lists & Settings\'!T2:T,E2:E)=0,"Inactive/unknown counsellor; ",""))' +
-    '&IF(F2:F="","Missing stage; ",IF(COUNTIFS(' + sm('B') + ',F2:F,' + sm('F') + ',"Active")=0,"Inactive/unknown stage; ",""))' +
-    '&IF(G2:G="",IF(COUNTIFS(' + sm('B') + ',F2:F,' + sm('C') + ',"<>",' + sm('F') + ',"Active")>0,"Missing substage; ",""),' +
-    'IF(COUNTIFS(' + sm('B') + ',F2:F,' + sm('C') + ',G2:G,' + sm('F') + ',"Active")=0,"Substage not valid for stage; ",""))' +
-    '&IF(I2:I="","",IF(ISNUMBER(I2:I),"","Invalid last contact date; "))' +
-    '&IF(J2:J="",IF(' + open + ',"No next follow-up date; ",""),IF(ISNUMBER(J2:J),IF(' + open + '*(J2:J<TODAY()),"Overdue follow-up; ",""),"Invalid follow-up date; "))' +
-    '&IF(AB2:AB="","Missing status; ","")' +
-    ',";\\s*$","")))}';
+  var dq = lcf_('={"Data Quality Flags";ARRAYFORMULA(IF(A2:A="",,REGEXREPLACE(' +
+    'IF({MOBILE}2:{MOBILE}="","Missing mobile; ",IF(REGEXMATCH(TO_TEXT({MOBILE}2:{MOBILE}),SET_MOBILE_PATTERN),"","Invalid mobile format; "))' +
+    '&IF({EMAIL}2:{EMAIL}="","",IF(REGEXMATCH(TO_TEXT({EMAIL}2:{EMAIL}),"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"),"","Invalid email; "))' +
+    '&IF({OWNER}2:{OWNER}="","Unassigned; ",IF(COUNTIF(\'Lists & Settings\'!T2:T,{OWNER}2:{OWNER})=0,"Inactive/unknown counsellor; ",""))' +
+    '&IF({STAGE}2:{STAGE}="","Missing stage; ",IF(COUNTIFS(' + sm('B') + ',{STAGE}2:{STAGE},' + sm('F') + ',"Active")=0,"Inactive/unknown stage; ",""))' +
+    '&IF({SUBSTAGE}2:{SUBSTAGE}="",IF(COUNTIFS(' + sm('B') + ',{STAGE}2:{STAGE},' + sm('C') + ',"<>",' + sm('F') + ',"Active")>0,"Missing substage; ",""),' +
+    'IF(COUNTIFS(' + sm('B') + ',{STAGE}2:{STAGE},' + sm('C') + ',{SUBSTAGE}2:{SUBSTAGE},' + sm('F') + ',"Active")=0,"Substage not valid for stage; ",""))' +
+    '&IF({LAST_CONTACT}2:{LAST_CONTACT}="","",IF(ISNUMBER({LAST_CONTACT}2:{LAST_CONTACT}),"","Invalid last contact date; "))' +
+    '&IF({NEXT_FU}2:{NEXT_FU}="",IF(' + open + ',"No next follow-up date; ",""),IF(ISNUMBER({NEXT_FU}2:{NEXT_FU}),IF(' + open + '*({NEXT_FU}2:{NEXT_FU}<TODAY()),"Overdue follow-up; ",""),"Invalid follow-up date; "))' +
+    '&IF({STATUS}2:{STATUS}="","Missing status; ","")' +
+    ',";\\s*$","")))}');
   return {
     fuCount: '={"Follow-Up Count";ARRAYFORMULA(IF(A2:A="",,IFERROR(VLOOKUP(A2:A,QUERY(' + log +
       ',"select B, count(B) where B <> \'\' and M = \'Contact\' group by B label count(B) \'\'",0),2,FALSE),0)))}',
@@ -461,16 +579,18 @@ function addLeadHeaderNotes_(sh) {
   notes[LC.FU_COUNT] = 'Formula: number of Contact activities for this Lead ID in Follow-Up Log.';
   notes[LC.UPDATED_BY] = 'Counsellor (mapped from Google account) or email of the person who last changed this lead.';
   notes[LC.LAST_ACTIVITY] = 'Fixed timestamp of the latest record update or follow-up (never recalculates).';
-  notes[LC.CUSTOM_FIRST] = 'Custom fields: administrators may rename headers Q1:Z1. Data stays editable.';
+  notes[LC.CUSTOM_FIRST] = 'Custom fields (E:N) are optional: Lead CRM > Add custom field / Remove custom field, or Lists & Settings > Custom Fields. Inactive slots are hidden; data is kept.';
   notes[LC.CREATED] = 'Fixed timestamp written when the Lead ID was generated.';
   notes[LC.LAST_FU_DATE] = 'Date of the latest activity logged through the follow-up form (any type).';
   notes[LC.STAGE_CHANGED] = 'Fixed timestamp of the latest stage or substage change.';
   notes[LC.ASSIGNED_DATE] = 'Fixed timestamp of the latest (re)assignment.';
   notes[LC.PREV_OWNER] = 'Counsellor before the latest reassignment. Full history: Follow-Up Log (Lead Assigned).';
   notes[LC.ACTIVITY_TOTAL] = 'Formula: Contact + Record Update entries in Follow-Up Log (System entries excluded).';
-  notes[LC.DQ_FLAGS] = 'Formula: data-quality warnings (missing/invalid contact, duplicates, stage problems, overdue).';
+  notes[LC.DQ_FLAGS] = 'Formula: data-quality warnings (missing/invalid contact, unassigned, stage problems, overdue). Duplicate mobiles/emails are shown in orange in C/D.';
   notes[LC.SNAPSHOT] = 'Hidden. Used by the script to detect changes, including bulk pastes. Do not edit.';
-  Object.keys(notes).forEach(function (c) { sh.getRange(1, parseInt(c, 10)).setNote(notes[c]); });
+  var row = [];
+  for (var c = 1; c <= LEAD_COLS; c++) row.push(notes[c] || '');
+  sh.getRange(1, 1, 1, LEAD_COLS).setNotes([row]);
 }
 
 /** Data validation, conditional formatting, banding and filter for Lead Management (re-runnable). */
@@ -485,16 +605,17 @@ function applyLeadSheetRules_(sh) {
   col(1, LEAD_COLS).clearDataValidations();
   col(LC.ID).setDataValidation(dv().requireFormulaSatisfied('=COUNTIF($A$2:$A,A2)=1').setAllowInvalid(false)
     .setHelpText('Lead IDs are generated automatically and must be unique.').build());
-  col(LC.MOBILE).setDataValidation(dv().requireFormulaSatisfied('=REGEXMATCH(TO_TEXT(C2),INDIRECT("SET_MOBILE_PATTERN"))')
+  col(LC.MOBILE).setDataValidation(dv().requireFormulaSatisfied(lcf_('=REGEXMATCH(TO_TEXT({MOBILE}2),INDIRECT("SET_MOBILE_PATTERN"))'))
     .setAllowInvalid(true).setHelpText('Mobile number format looks wrong (see Lists & Settings > Mobile Number Pattern). Allowed, but flagged.').build());
   col(LC.EMAIL).setDataValidation(dv().requireTextIsEmail().setAllowInvalid(true).setHelpText('Email format looks wrong. Allowed, but flagged.').build());
   col(LC.OWNER).setDataValidation(dv().requireValueInRange(listRange(LS.H_ACTIVE_CNS), true).setAllowInvalid(false)
     .setHelpText('Choose an active counsellor (Counsellor Master).').build());
   col(LC.STAGE).setDataValidation(dv().requireValueInRange(listRange(LS.H_ACTIVE_STAGES), true).setAllowInvalid(false)
     .setHelpText('Choose an active stage (Stage Master).').build());
-  col(LC.SUBSTAGE).setDataValidation(noSubstageRule_(''));
+  // Substage (G): no rule on empty rows. Per-row dropdowns are created only when a stage is chosen
+  // (edit trigger / follow-up form) or for rows that already hold leads (refreshAllSubstageValidations_).
   col(LC.PRIORITY).setDataValidation(dv().requireValueInRange(listRange(LS.PRIORITY), true).setAllowInvalid(false).build());
-  col(LC.LAST_CONTACT).setDataValidation(dv().requireFormulaSatisfied('=AND(ISDATE(I2),INT(I2)<=TODAY())').setAllowInvalid(false)
+  col(LC.LAST_CONTACT).setDataValidation(dv().requireFormulaSatisfied(lcf_('=AND(ISDATE({LAST_CONTACT}2),INT({LAST_CONTACT}2)<=TODAY())')).setAllowInvalid(false)
     .setHelpText('Enter a valid date that is not in the future.').build());
   col(LC.NEXT_FU).setDataValidation(dv().requireDate().setAllowInvalid(false).setHelpText('Enter a valid date (dd-mmm-yyyy).').build());
   col(LC.OUTCOME).setDataValidation(dv().requireValueInRange(listRange(LS.OUTCOME), true).setAllowInvalid(false).build());
@@ -513,17 +634,19 @@ function applyLeadSheetRules_(sh) {
     return b.build();
   };
   sh.setConditionalFormatRules([
-    cf('=$AB2="Converted"', [full], '#D5F5E3', '#145A32'),
-    cf('=OR($AB2="Lost",$AB2="Duplicate")', [full], '#E5E7E9', '#7B7D7D', false, function (b) { b.setItalic(true); }),
+    cf(lcf_('=${STATUS}2="Converted"'), [full], '#D5F5E3', '#145A32'),
+    cf(lcf_('=OR(${STATUS}2="Lost",${STATUS}2="Duplicate")'), [full], '#E5E7E9', '#7B7D7D', false, function (b) { b.setItalic(true); }),
     cf('=AND($A2<>"",COUNTIF($A$2:$A,$A2)>1)', [col(LC.ID)], COLORS.red, '#FFFFFF', true),
-    cf('=AND(ISNUMBER($J2),$J2<TODAY())', [col(LC.ID), col(LC.NEXT_FU)], '#F5B7B1', '#922B21', true),
-    cf('=AND(ISNUMBER($J2),INT($J2)=TODAY())', [col(LC.ID), col(LC.NEXT_FU)], '#FCF3CF', '#7D6608', true),
-    cf('=AND(ISNUMBER($J2),INT($J2)>TODAY(),INT($J2)<=TODAY()+INDIRECT("SET_UPCOMING_DAYS"))', [col(LC.NEXT_FU)], '#D6EAF8', '#1B4F72'),
-    cf('=$H2="Critical"', [col(LC.PRIORITY)], '#922B21', '#FFFFFF', true),
-    cf('=$H2="Hot"', [col(LC.PRIORITY)], '#F5CBA7', '#784212', true),
-    cf('=AND($C2<>"",ISNUMBER(SEARCH("Duplicate mobile",$AH2)))', [col(LC.MOBILE)], '#FAD7A0', '#784212'),
-    cf('=AND($D2<>"",ISNUMBER(SEARCH("Duplicate email",$AH2)))', [col(LC.EMAIL)], '#FAD7A0', '#784212'),
-    cf('=$AH2<>""', [col(LC.DQ_FLAGS)], null, COLORS.amber, false, function (b) { b.setItalic(true); })
+    cf(lcf_('=AND(ISNUMBER(${NEXT_FU}2),${NEXT_FU}2<TODAY())'), [col(LC.ID), col(LC.NEXT_FU)], '#F5B7B1', '#922B21', true),
+    cf(lcf_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)=TODAY())'), [col(LC.ID), col(LC.NEXT_FU)], '#FCF3CF', '#7D6608', true),
+    cf(lcf_('=AND(ISNUMBER(${NEXT_FU}2),INT(${NEXT_FU}2)>TODAY(),INT(${NEXT_FU}2)<=TODAY()+INDIRECT("SET_UPCOMING_DAYS"))'), [col(LC.NEXT_FU)], '#D6EAF8', '#1B4F72'),
+    cf(lcf_('=${PRIORITY}2="Critical"'), [col(LC.PRIORITY)], '#922B21', '#FFFFFF', true),
+    cf(lcf_('=${PRIORITY}2="Hot"'), [col(LC.PRIORITY)], '#F5CBA7', '#784212', true),
+    // Duplicate checks run as conditional formatting (evaluated for visible rows only) instead of an
+    // ARRAYFORMULA COUNTIF over every row, which is quadratic and slowed the whole workbook.
+    cf(lcf_('=AND(${MOBILE}2<>"",INDIRECT("SET_DUP_MOBILE")<>"Off",COUNTIF(${MOBILE}$2:${MOBILE},${MOBILE}2)>1)'), [col(LC.MOBILE)], '#FAD7A0', '#784212'),
+    cf(lcf_('=AND(${EMAIL}2<>"",INDIRECT("SET_DUP_EMAIL")<>"Off",COUNTIF(${EMAIL}$2:${EMAIL},${EMAIL}2)>1)'), [col(LC.EMAIL)], '#FAD7A0', '#784212'),
+    cf(lcf_('=${DQ_FLAGS}2<>""'), [col(LC.DQ_FLAGS)], null, COLORS.amber, false, function (b) { b.setItalic(true); })
   ]);
 
   sh.getBandings().forEach(function (b) { b.remove(); });
@@ -555,8 +678,8 @@ function extendLeadSheet() {
 /* Follow-Up Log                                                       */
 /* ================================================================== */
 
-function setupLogSheet_(sh) {
-  ensureSize_(sh, LOG_INITIAL_ROWS + 1, LOG_COLS);
+function setupLogSheet_(sh, leadRows) {
+  ensureSize_(sh, Math.min(LOG_INITIAL_ROWS, leadRows || LOG_INITIAL_ROWS) + 1, LOG_COLS);
   sh.getRange(1, 1, 1, LOG_COLS).setValues([LOG_HEADERS]);
   styleHeader_(sh.getRange(1, 1, 1, LOG_COLS), COLORS.teal);
   sh.getRange(1, LG.CATEGORY, 1, 6).setBackground(COLORS.headerSystem);
@@ -567,7 +690,8 @@ function setupLogSheet_(sh) {
   sh.getRange(2, LG.TIME, rows, 1).setNumberFormat('dd-mmm-yyyy hh:mm:ss');
   sh.getRange(2, LG.NEXT_FU, rows, 1).setNumberFormat('dd-mmm-yyyy');
   var widths = [110, 100, 170, 160, 150, 140, 140, 140, 170, 110, 280, 190, 120, 150, 150, 200, 150, 120];
-  widths.forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+  sh.setColumnWidths(1, LOG_COLS, 140);
+  widths.forEach(function (w, i) { if (w !== 140) sh.setColumnWidth(i + 1, w); });
   sh.hideColumns(LG.SUBMISSION);
   var settingsSheet = getSheet_(SHEET.SETTINGS);
   sh.getRange(2, LG.TYPE, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation()
@@ -582,9 +706,12 @@ function setupLogSheet_(sh) {
   ]);
   if (sh.getFilter()) sh.getFilter().remove();
   sh.getRange(1, 1, sh.getMaxRows(), LOG_COLS).createFilter();
-  sh.getRange(1, LG.CATEGORY).setNote('Contact = actual call/message/email. Record Update = change to lead details. System = automated change by the script.');
-  sh.getRange(1, LG.COUNSELLOR).setNote('Counsellor credited with the activity (follow-up form) or the person who made the change (audit entries). "System" for automated entries.');
-  sh.getRange(1, LG.OWNER).setNote('Assigned counsellor of the lead when the entry was written.');
+  var notes = [];
+  for (var c = 1; c <= LOG_COLS; c++) notes.push('');
+  notes[LG.CATEGORY - 1] = 'Contact = actual call/message/email. Record Update = change to lead details. System = automated change by the script.';
+  notes[LG.COUNSELLOR - 1] = 'Counsellor credited with the activity (follow-up form) or the person who made the change (audit entries). "System" for automated entries.';
+  notes[LG.OWNER - 1] = 'Assigned counsellor of the lead when the entry was written.';
+  sh.getRange(1, 1, 1, LOG_COLS).setNotes([notes]);
 }
 
 /* ================================================================== */
@@ -605,21 +732,21 @@ function setupDashboard_(sh) {
   sh.setHiddenGridlines(true);
   sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setFontFamily('Roboto').setFontSize(10).setVerticalAlignment('middle');
   sh.setColumnWidth(1, 18);
-  for (var c = 2; c <= 12; c++) sh.setColumnWidth(c, 118);
+  sh.setColumnWidths(2, 11, 118);
   sh.setColumnWidth(13, 24);
 
-  var LM = function (c) { return "'Lead Management'!" + c + '2:' + c; };
+  var LM = function (c) { var l = colLetter_(c); return "'Lead Management'!" + l + '2:' + l; };
   var FL = function (c) { return "'Follow-Up Log'!" + c + '2:' + c; };
   var LS_ = function (c) { return "'Lists & Settings'!" + c + '2:' + c; };
   var FROM = DASH.FROM, TO = DASH.TO, CRIT = DASH.CRIT, ALLF = DASH.ALL, SEL = DASH.SEL;
-  var LEADS = LM('A') + ',"<>"';
-  var CNS_LM = LM('E') + ',' + CRIT;
+  var LEADS = LM(LC.ID) + ',"<>"';
+  var CNS_LM = LM(LC.OWNER) + ',' + CRIT;
   var CNS_FL = FL('D') + ',' + CRIT;
   var PERIOD_FL = FL('E') + ',">="&' + FROM + ',' + FL('E') + ',"<"&(' + TO + '+1)';
-  var OPEN = LM('AB') + ',"<>Converted",' + LM('AB') + ',"<>Lost",' + LM('AB') + ',"<>Duplicate"';
-  var OPENB = '(' + LM('AB') + '<>"Converted")*(' + LM('AB') + '<>"Lost")*(' + LM('AB') + '<>"Duplicate")';
+  var OPEN = LM(LC.STATUS) + ',"<>Converted",' + LM(LC.STATUS) + ',"<>Lost",' + LM(LC.STATUS) + ',"<>Duplicate"';
+  var OPENB = '(' + LM(LC.STATUS) + '<>"Converted")*(' + LM(LC.STATUS) + '<>"Lost")*(' + LM(LC.STATUS) + '<>"Duplicate")';
   var FL_CNS_B = '((' + ALLF + ')+(' + FL('D') + '=' + SEL + '))';
-  var LM_CNS_B = '((' + ALLF + ')+(' + LM('E') + '=' + SEL + '))';
+  var LM_CNS_B = '((' + ALLF + ')+(' + LM(LC.OWNER) + '=' + SEL + '))';
   var FL_PERIOD_B = FL('E') + '>=' + FROM + ',' + FL('E') + '<' + TO + '+1';
   var uniq = function (conds) { return 'ARRAYFORMULA(IFERROR(COUNTUNIQUE(FILTER(' + FL('B') + ',' + conds + ')),0))'; };
 
@@ -666,16 +793,16 @@ function setupDashboard_(sh) {
   // ---- KPI cards ----
   var kpis = [
     ['Total Leads', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ')', 'All leads with a Lead ID. Not date-filtered.', '#,##0'],
-    ['Leads Created (Period)', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM('AA') + ',">="&' + FROM + ',' + LM('AA') + ',"<"&(' + TO + '+1))', 'Leads whose Lead Created Date is in the period.', '#,##0'],
+    ['Leads Created (Period)', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM(LC.CREATED) + ',">="&' + FROM + ',' + LM(LC.CREATED) + ',"<"&(' + TO + '+1))', 'Leads whose Lead Created Date is in the period.', '#,##0'],
     ['Leads Worked (Period)', '=' + uniq(FL('M') + '<>"System",' + FL('M') + '<>"",' + FL_PERIOD_B + ',' + FL_CNS_B), 'Unique Lead IDs with at least one Contact or Record Update activity in the period.', '#,##0'],
     ['Unique Leads Contacted', '=' + uniq(FL('M') + '="Contact",' + FL_PERIOD_B + ',' + FL_CNS_B), 'Unique Lead IDs with at least one Contact activity in the period (each lead counted once).', '#,##0'],
     ['Follow-Ups Completed', '=COUNTIFS(' + FL('M') + ',"Contact",' + PERIOD_FL + ',' + CNS_FL + ')', 'Number of Contact activities logged in the period.', '#,##0'],
-    ['Follow-Ups Pending', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM('J') + ',">="&TODAY(),' + OPEN + ')', 'Open leads with a next follow-up date today or later (as of today).', '#,##0'],
-    ['Follow-Ups Overdue', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM('J') + ',"<"&TODAY(),' + OPEN + ')', 'Open leads whose next follow-up date is before today.', '#,##0'],
-    ['Converted Leads', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM('AB') + ',"Converted")', 'Leads with Lead Status = Converted (current).', '#,##0'],
-    ['Lost Leads', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM('AB') + ',"Lost")', 'Leads with Lead Status = Lost (current).', '#,##0'],
-    ['Leads Not Contacted', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM('L') + ',0,' + OPEN + ')', 'Open leads with zero Contact activities ever (Follow-Up Count = 0).', '#,##0'],
-    ['Leads With No Activity', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM('AG') + ',0)', 'Leads with no Contact or Record Update entry in the log ever (unworked).', '#,##0'],
+    ['Follow-Ups Pending', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM(LC.NEXT_FU) + ',">="&TODAY(),' + OPEN + ')', 'Open leads with a next follow-up date today or later (as of today).', '#,##0'],
+    ['Follow-Ups Overdue', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM(LC.NEXT_FU) + ',"<"&TODAY(),' + OPEN + ')', 'Open leads whose next follow-up date is before today.', '#,##0'],
+    ['Converted Leads', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM(LC.STATUS) + ',"Converted")', 'Leads with Lead Status = Converted (current).', '#,##0'],
+    ['Lost Leads', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM(LC.STATUS) + ',"Lost")', 'Leads with Lead Status = Lost (current).', '#,##0'],
+    ['Leads Not Contacted', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM(LC.FU_COUNT) + ',0,' + OPEN + ')', 'Open leads with zero Contact activities ever (Follow-Up Count = 0).', '#,##0'],
+    ['Leads With No Activity', '=COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM(LC.ACTIVITY_TOTAL) + ',0)', 'Leads with no Contact or Record Update entry in the log ever (unworked).', '#,##0'],
     ['Conversion Rate', '', 'Converted Leads / Total Leads.', '0.0%']
   ];
   var cardCell = {}, cardAbs = {};
@@ -710,11 +837,11 @@ function setupDashboard_(sh) {
   blockFormulas_(sh, A, 3, function (r) {
     var b = '$B' + r;
     return [
-      '=IF(' + b + '="",,COUNTIFS(' + LM('F') + ',' + b + ',' + LEADS + ',' + CNS_LM + '))',
+      '=IF(' + b + '="",,COUNTIFS(' + LM(LC.STAGE) + ',' + b + ',' + LEADS + ',' + CNS_LM + '))',
       '=IF(' + b + '="",,' + uniq(FL('H') + '=' + b + ',' + FL('M') + '="Contact",' + FL_PERIOD_B + ',' + FL_CNS_B) + ')',
       '=IF(' + b + '="",,COUNTIFS(' + FL('H') + ',' + b + ',' + FL('M') + ',"Contact",' + PERIOD_FL + ',' + CNS_FL + '))',
-      '=IF(' + b + '="",,COUNTIFS(' + LM('F') + ',' + b + ',' + LEADS + ',' + CNS_LM + ',' + LM('J') + ',"<"&TODAY(),' + OPEN + '))',
-      '=IF(' + b + '="",,COUNTIFS(' + LM('F') + ',' + b + ',' + LEADS + ',' + CNS_LM + ',' + LM('AB') + ',"Converted"))',
+      '=IF(' + b + '="",,COUNTIFS(' + LM(LC.STAGE) + ',' + b + ',' + LEADS + ',' + CNS_LM + ',' + LM(LC.NEXT_FU) + ',"<"&TODAY(),' + OPEN + '))',
+      '=IF(' + b + '="",,COUNTIFS(' + LM(LC.STAGE) + ',' + b + ',' + LEADS + ',' + CNS_LM + ',' + LM(LC.STATUS) + ',"Converted"))',
       '=IF(' + b + '="",,IFERROR(C' + r + '/' + TOTAL + ',0))'
     ];
   });
@@ -729,9 +856,9 @@ function setupDashboard_(sh) {
   blockFormulas_(sh, B, 4, function (r) {
     var b = '$B' + r, c = '$C' + r;
     return [
-      '=IF(' + b + '="",,COUNTIFS(' + LM('F') + ',' + b + ',' + LM('G') + ',' + c + ',' + LEADS + ',' + CNS_LM + '))',
+      '=IF(' + b + '="",,COUNTIFS(' + LM(LC.STAGE) + ',' + b + ',' + LM(LC.SUBSTAGE) + ',' + c + ',' + LEADS + ',' + CNS_LM + '))',
       '=IF(' + b + '="",,' + uniq(FL('H') + '=' + b + ',' + FL('I') + '=' + c + ',' + FL('M') + '="Contact",' + FL_PERIOD_B + ',' + FL_CNS_B) + ')',
-      '=IF(' + b + '="",,COUNTIFS(' + LM('F') + ',' + b + ',' + LM('G') + ',' + c + ',' + LEADS + ',' + CNS_LM + ',' + LM('AB') + ',"Converted"))'
+      '=IF(' + b + '="",,COUNTIFS(' + LM(LC.STAGE) + ',' + b + ',' + LM(LC.SUBSTAGE) + ',' + c + ',' + LEADS + ',' + CNS_LM + ',' + LM(LC.STATUS) + ',"Converted"))'
     ];
   });
   layout.substage = B;
@@ -744,16 +871,16 @@ function setupDashboard_(sh) {
   sh.getRange(C.data, 2).setFormula('=ARRAY_CONSTRAIN(IF(' + ALLF + ',IFERROR(FILTER(' + "'Counsellor Master'!B2:B" + ',' + "'Counsellor Master'!B2:B" + '<>""),""),' + SEL + '),40,1)');
   blockFormulas_(sh, C, 3, function (r) {
     var b = '$B' + r;
-    var mine = LM('E') + ',' + b;
+    var mine = LM(LC.OWNER) + ',' + b;
     return [
       '=IF(' + b + '="",,COUNTIFS(' + mine + ',' + LEADS + '))',
       '=IF(' + b + '="",,ARRAYFORMULA(IFERROR(COUNTUNIQUE(FILTER(' + FL('B') + ',' + FL('D') + '=' + b + ',' + FL('M') + '="Contact",' + FL_PERIOD_B + ')),0)))',
       '=IF(' + b + '="",,COUNTIFS(' + FL('D') + ',' + b + ',' + FL('M') + ',"Contact",' + PERIOD_FL + '))',
-      '=IF(' + b + '="",,COUNTIFS(' + mine + ',' + LEADS + ',' + LM('J') + ',">="&TODAY(),' + OPEN + '))',
-      '=IF(' + b + '="",,COUNTIFS(' + mine + ',' + LEADS + ',' + LM('J') + ',"<"&TODAY(),' + OPEN + '))',
-      '=IF(' + b + '="",,COUNTIFS(' + mine + ',' + LEADS + ',' + LM('AB') + ',"Converted"))',
+      '=IF(' + b + '="",,COUNTIFS(' + mine + ',' + LEADS + ',' + LM(LC.NEXT_FU) + ',">="&TODAY(),' + OPEN + '))',
+      '=IF(' + b + '="",,COUNTIFS(' + mine + ',' + LEADS + ',' + LM(LC.NEXT_FU) + ',"<"&TODAY(),' + OPEN + '))',
+      '=IF(' + b + '="",,COUNTIFS(' + mine + ',' + LEADS + ',' + LM(LC.STATUS) + ',"Converted"))',
       '=IF(' + b + '="",,IFERROR(H' + r + '/C' + r + ',0))',
-      '=IF(' + b + '="",,COUNTIFS(' + mine + ',' + LEADS + ',' + LM('L') + ',0,' + OPEN + '))',
+      '=IF(' + b + '="",,COUNTIFS(' + mine + ',' + LEADS + ',' + LM(LC.FU_COUNT) + ',0,' + OPEN + '))',
       '=IF(' + b + '="",,IFERROR(E' + r + '/D' + r + ',0))'
     ];
   });
@@ -769,8 +896,8 @@ function setupDashboard_(sh) {
   blockFormulas_(sh, F, 5, function (r) {
     var b = '$B' + r, mn = '$C' + r, mx = 'IF($D' + r + '="",100000,$D' + r + ')';
     return [
-      '=IF(' + b + '="",,COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + OPEN + ',' + LM('AA') + ',"<"&(TODAY()-' + mn + '+1),' + LM('AA') + ',">="&(TODAY()-' + mx + ')))',
-      '=IF(' + b + '="",,COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + OPEN + ',' + LM('J') + ',"<="&(TODAY()-' + mn + '),' + LM('J') + ',">="&(TODAY()-' + mx + ')))'
+      '=IF(' + b + '="",,COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + OPEN + ',' + LM(LC.CREATED) + ',"<"&(TODAY()-' + mn + '+1),' + LM(LC.CREATED) + ',">="&(TODAY()-' + mx + ')))',
+      '=IF(' + b + '="",,COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + OPEN + ',' + LM(LC.NEXT_FU) + ',"<="&(TODAY()-' + mn + '),' + LM(LC.NEXT_FU) + ',">="&(TODAY()-' + mx + ')))'
     ];
   });
   // Lead distribution by status (H:I) and by source (K:L) on the same rows
@@ -781,8 +908,8 @@ function setupDashboard_(sh) {
   var dist = [], src = [];
   for (var i = 0; i < F.n; i++) {
     var r = F.data + i;
-    dist.push(['=IF($H' + r + '="",,COUNTIFS(' + LM('AB') + ',$H' + r + ',' + LEADS + ',' + CNS_LM + '))']);
-    src.push(['=IF($K' + r + '="",,COUNTIFS(' + LM('P') + ',$K' + r + ',' + LEADS + ',' + CNS_LM + '))']);
+    dist.push(['=IF($H' + r + '="",,COUNTIFS(' + LM(LC.STATUS) + ',$H' + r + ',' + LEADS + ',' + CNS_LM + '))']);
+    src.push(['=IF($K' + r + '="",,COUNTIFS(' + LM(LC.SOURCE) + ',$K' + r + ',' + LEADS + ',' + CNS_LM + '))']);
   }
   sh.getRange(F.data, 9, F.n, 1).setFormulas(dist);
   sh.getRange(F.data, 12, F.n, 1).setFormulas(src);
@@ -793,12 +920,12 @@ function setupDashboard_(sh) {
   var G = section_(sh, row, 'G. Exceptions - Unassigned & Unworked Leads (first 25; full lists via Lead CRM > Views)', [
     'Unassigned Lead ID', 'Lead Name', 'Mobile', 'Created', '', 'Unworked Lead ID', 'Lead Name', 'Counsellor', 'Created'], 25);
   sh.getRange(G.data - 1, 6).setValue('').setBackground(null);
-  sh.getRange(G.title, 8).setFormula('="Unassigned (open): "&COUNTIFS(' + LEADS + ',' + LM('E') + ',"",' + OPEN + ')&"   |   Unworked: "&COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM('AG') + ',0)&"   |   Leads with data-quality flags: "&COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM('AH') + ',"?*")')
+  sh.getRange(G.title, 8).setFormula('="Unassigned (open): "&COUNTIFS(' + LEADS + ',' + LM(LC.OWNER) + ',"",' + OPEN + ')&"   |   Unworked: "&COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM(LC.ACTIVITY_TOTAL) + ',0)&"   |   Leads with data-quality flags: "&COUNTIFS(' + LEADS + ',' + CNS_LM + ',' + LM(LC.DQ_FLAGS) + ',"?*")')
     .setFontColor(COLORS.amber).setFontWeight('bold');
-  sh.getRange(G.data, 2).setFormula('=IFERROR(ARRAY_CONSTRAIN(ARRAYFORMULA(SORT(FILTER({' + LM('A') + ',' + LM('B') + ',' + LM('C') + ',' + LM('AA') + '},' +
-    LM('A') + '<>"",' + LM('E') + '="",' + OPENB + '),4,TRUE)),25,4),"None")');
-  sh.getRange(G.data, 7).setFormula('=IFERROR(ARRAY_CONSTRAIN(ARRAYFORMULA(SORT(FILTER({' + LM('A') + ',' + LM('B') + ',' + LM('E') + ',' + LM('AA') + '},' +
-    LM('A') + '<>"",' + LM('AG') + '=0,' + LM_CNS_B + '),4,TRUE)),25,4),"None")');
+  sh.getRange(G.data, 2).setFormula('=IFERROR(ARRAY_CONSTRAIN(ARRAYFORMULA(SORT(FILTER({' + LM(LC.ID) + ',' + LM(LC.NAME) + ',' + LM(LC.MOBILE) + ',' + LM(LC.CREATED) + '},' +
+    LM(LC.ID) + '<>"",' + LM(LC.OWNER) + '="",' + OPENB + '),4,TRUE)),25,4),"None")');
+  sh.getRange(G.data, 7).setFormula('=IFERROR(ARRAY_CONSTRAIN(ARRAYFORMULA(SORT(FILTER({' + LM(LC.ID) + ',' + LM(LC.NAME) + ',' + LM(LC.OWNER) + ',' + LM(LC.CREATED) + '},' +
+    LM(LC.ID) + '<>"",' + LM(LC.ACTIVITY_TOTAL) + '=0,' + LM_CNS_B + '),4,TRUE)),25,4),"None")');
   sh.getRange(G.data, 5, G.n, 1).setNumberFormat('dd-mmm-yyyy');
   sh.getRange(G.data, 10, G.n, 1).setNumberFormat('dd-mmm-yyyy');
   layout.exceptions = G;
@@ -826,9 +953,9 @@ function setupDashboard_(sh) {
   var E = section_(sh, row, 'E. Follow-Ups Due Today or Overdue (most overdue first, up to 500)', ['Lead ID', 'Lead Name', 'Mobile Number',
     'Counsellor', 'Lead Stage', 'Lead Substage', 'Next Follow-Up Date', 'Days Overdue', 'Last Activity Timestamp'], 500);
   ensureSize_(sh, E.end + 5, 30);
-  sh.getRange(E.data, 2).setFormula('=IFERROR(ARRAY_CONSTRAIN(ARRAYFORMULA(SORT(FILTER({' + LM('A') + ',' + LM('B') + ',' + LM('C') + ',' +
-    LM('E') + ',' + LM('F') + ',' + LM('G') + ',' + LM('J') + ',TODAY()-INT(' + LM('J') + '),' + LM('N') + '},' +
-    LM('A') + '<>"",ISNUMBER(' + LM('J') + '),' + LM('J') + '<TODAY()+1,' + OPENB + ',' + LM_CNS_B + '),8,FALSE)),500,9),"No follow-ups due today or overdue.")');
+  sh.getRange(E.data, 2).setFormula('=IFERROR(ARRAY_CONSTRAIN(ARRAYFORMULA(SORT(FILTER({' + LM(LC.ID) + ',' + LM(LC.NAME) + ',' + LM(LC.MOBILE) + ',' +
+    LM(LC.OWNER) + ',' + LM(LC.STAGE) + ',' + LM(LC.SUBSTAGE) + ',' + LM(LC.NEXT_FU) + ',TODAY()-INT(' + LM(LC.NEXT_FU) + '),' + LM(LC.LAST_ACTIVITY) + '},' +
+    LM(LC.ID) + '<>"",ISNUMBER(' + LM(LC.NEXT_FU) + '),' + LM(LC.NEXT_FU) + '<TODAY()+1,' + OPENB + ',' + LM_CNS_B + '),8,FALSE)),500,9),"No follow-ups due today or overdue.")');
   sh.getRange(E.data, 8, E.n, 1).setNumberFormat('dd-mmm-yyyy');
   sh.getRange(E.data, 9, E.n, 1).setNumberFormat('0');
   sh.getRange(E.data, 10, E.n, 1).setNumberFormat('dd-mmm-yyyy hh:mm');
@@ -841,9 +968,7 @@ function setupDashboard_(sh) {
   layout.pending = E;
 
   PropertiesService.getDocumentProperties().setProperty(PROP.DASH_LAYOUT, JSON.stringify(layout));
-  SpreadsheetApp.flush();
-  buildDashboardCharts_(sh, layout);
-  writeDashboardTimestamp_(sh);
+  writeDashboardTimestamp_(sh);   // charts are built in the next setup stage
   sh.setFrozenRows(5);
 }
 
@@ -874,12 +999,32 @@ function writeDashboardTimestamp_(sh) {
   sh.getRange(DASH.REFRESHED).setValue(new Date()).setNumberFormat('dd-mmm-yyyy hh:mm');
 }
 
-/** Number of filled rows in a dashboard block's label column (at least 1). */
-function filledRows_(sh, sec, col) {
-  var vals = sh.getRange(sec.data, col || 2, sec.n, 1).getDisplayValues();
-  var n = 0;
-  vals.forEach(function (v, i) { if (str_(v[0]) !== '') n = i + 1; });
-  return Math.max(n, 1);
+/**
+ * Rows each chart should cover, worked out from the master data instead of reading the dashboard's
+ * formula results (reading them forces a full recalculation, which is slow on large sheets).
+ */
+function chartRowCounts_(sh, layout) {
+  clearMemo_();
+  var clamp = function (n, max) { return Math.min(Math.max(n, 1), max); };
+  var pairs = {};
+  getStageInfo_().list.forEach(function (s) {
+    var subs = Object.keys(s.allSubs);
+    if (!subs.length) pairs[s.name.toLowerCase() + '|'] = true;
+    subs.forEach(function (k) { pairs[s.name.toLowerCase() + '|' + k] = true; });
+  });
+  var settings = getSheet_(SHEET.SETTINGS);
+  var lastS = Math.max(settings.getLastRow(), 2);
+  var count = function (c) {
+    return settings.getRange(2, c, lastS - 1, 1).getValues().filter(function (r) { return str_(r[0]) !== ''; }).length;
+  };
+  var sel = str_(sh.getRange(DASH.COUNSELLOR).getValue());
+  return {
+    stage: clamp(getStageInfo_().list.length, layout.stage.n),
+    substage: clamp(Object.keys(pairs).length, layout.substage.n),
+    counsellor: clamp(sel && sel !== ALL_COUNSELLORS ? 1 : getCounsellors_().length, layout.counsellor.n),
+    status: clamp(count(LS.STATUS), layout.ageing.n),
+    ageing: clamp(count(LS.BUCKET_LABEL), layout.ageing.n)
+  };
 }
 
 function buildDashboardCharts_(sh, layout) {
@@ -901,22 +1046,23 @@ function buildDashboardCharts_(sh, layout) {
     Object.keys(opts || {}).forEach(function (k) { b.setOption(k, opts[k]); });
     sh.insertChart(b.build());
   };
-  var nStage = filledRows_(sh, layout.stage);
+  var n = chartRowCounts_(sh, layout);
+  var nStage = n.stage;
   add(Charts.ChartType.BAR, [hdr(layout.stage, 2, nStage), hdr(layout.stage, 3, nStage), hdr(layout.stage, 4, nStage)],
     layout.stage.title, 'Leads by Stage (current) and Leads Worked in Period');
-  var nCns = filledRows_(sh, layout.counsellor);
+  var nCns = n.counsellor;
   add(Charts.ChartType.COLUMN, [hdr(layout.counsellor, 2, nCns), hdr(layout.counsellor, 4, nCns), hdr(layout.counsellor, 5, nCns)],
     layout.counsellor.title, 'Counsellor Productivity (selected period)');
   add(Charts.ChartType.LINE, [hdr(layout.daily, 2, layout.daily.n), hdr(layout.daily, 3, layout.daily.n),
     hdr(layout.daily, 4, layout.daily.n), hdr(layout.daily, 5, layout.daily.n)],
     layout.daily.title, 'Daily Activity Trend', { pointSize: 4 });
-  var nStatus = filledRows_(sh, layout.ageing, 8);
+  var nStatus = n.status;
   add(Charts.ChartType.PIE, [hdr(layout.ageing, 8, nStatus), hdr(layout.ageing, 9, nStatus)],
     layout.ageing.title, 'Lead Distribution by Status', { pieHole: 0.45 });
-  var nAge = filledRows_(sh, layout.ageing);
+  var nAge = n.ageing;
   add(Charts.ChartType.COLUMN, [hdr(layout.ageing, 2, nAge), hdr(layout.ageing, 5, nAge), hdr(layout.ageing, 6, nAge)],
     layout.ageing.title + 17, 'Lead Ageing & Follow-Up Ageing (open leads)');
-  var nSub = filledRows_(sh, layout.substage);
+  var nSub = n.substage;
   add(Charts.ChartType.BAR, [hdr(layout.substage, 3, nSub), hdr(layout.substage, 4, nSub)],
     layout.substage.title, 'Current Leads by Substage', { height: Math.max(320, nSub * 22) });
 }
@@ -925,9 +1071,7 @@ function buildDashboardCharts_(sh, layout) {
 function refreshDashboardCharts_() {
   var raw = PropertiesService.getDocumentProperties().getProperty(PROP.DASH_LAYOUT);
   if (!raw) return;
-  var sh = getSheet_(SHEET.DASHBOARD);
-  SpreadsheetApp.flush();
-  buildDashboardCharts_(sh, JSON.parse(raw));
+  buildDashboardCharts_(getSheet_(SHEET.DASHBOARD), JSON.parse(raw));
 }
 
 /** Menu: Lead CRM > Refresh Dashboard. */

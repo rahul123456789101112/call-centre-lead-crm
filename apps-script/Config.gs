@@ -3,8 +3,9 @@
  * Shared constants and helpers used by every other file in the Lead CRM project.
  *
  * Column numbers are 1-based. Do NOT insert, delete or reorder columns A:AI on
- * "Lead Management" or A:R on "Follow-Up Log" — rename headers only
- * (see docs/ADMIN.md). The script addresses columns by position.
+ * "Lead Management" or A:R on "Follow-Up Log". The script addresses columns by position.
+ * Custom fields (E:N) are managed by hiding/showing their fixed columns (Lead CRM > Add/Remove
+ * custom field), never by inserting or deleting columns. Formulas get column letters from LC via lcf_().
  */
 
 var CRM_TITLE = 'Lead CRM';
@@ -26,23 +27,28 @@ var LOG_GROW_BY = 5000;
 
 /* ---------- Lead Management columns ---------- */
 var LC = {
-  ID: 1, NAME: 2, MOBILE: 3, EMAIL: 4, OWNER: 5, STAGE: 6, SUBSTAGE: 7, PRIORITY: 8,
-  LAST_CONTACT: 9, NEXT_FU: 10, OUTCOME: 11, FU_COUNT: 12, UPDATED_BY: 13, LAST_ACTIVITY: 14,
-  REMARKS: 15, SOURCE: 16, CUSTOM_FIRST: 17, CUSTOM_LAST: 26, CREATED: 27, STATUS: 28,
+  ID: 1, NAME: 2, MOBILE: 3, EMAIL: 4, CUSTOM_FIRST: 5, CUSTOM_LAST: 14, OWNER: 15, STAGE: 16,
+  SUBSTAGE: 17, PRIORITY: 18, LAST_CONTACT: 19, NEXT_FU: 20, OUTCOME: 21, FU_COUNT: 22, UPDATED_BY: 23,
+  LAST_ACTIVITY: 24, REMARKS: 25, SOURCE: 26, CREATED: 27, STATUS: 28,
   LAST_FU_DATE: 29, STAGE_CHANGED: 30, ASSIGNED_DATE: 31, PREV_OWNER: 32,
   ACTIVITY_TOTAL: 33, DQ_FLAGS: 34, SNAPSHOT: 35
 };
+var CUSTOM_SLOTS = 10;
 var LEAD_COLS = 35;
 
 var LEAD_HEADERS = (function () {
-  var h = ['Lead ID', 'Lead Name', 'Mobile Number', 'Email ID', 'Assigned Counsellor', 'Lead Stage',
-    'Lead Substage', 'Lead Priority', 'Last Contact Date', 'Next Follow-Up Date', 'Last Follow-Up Outcome',
-    'Follow-Up Count', 'Last Updated By', 'Last Activity Timestamp', 'Lead Remarks', 'Lead Source'];
-  for (var i = 1; i <= 10; i++) h.push('Custom Field ' + i);
-  return h.concat(['Lead Created Date', 'Lead Status', 'Last Follow-Up Date', 'Last Stage Change Date',
-    'Lead Assigned Date', 'Previous Counsellor', 'Total Activities', 'Data Quality Flags',
-    'Audit Snapshot (system)']);
+  var h = ['Lead ID', 'Lead Name', 'Mobile Number', 'Email ID'];
+  for (var i = 1; i <= CUSTOM_SLOTS; i++) h.push(defaultCustomName_(i));
+  return h.concat(['Assigned Counsellor', 'Lead Stage', 'Lead Substage', 'Lead Priority', 'Last Contact Date',
+    'Next Follow-Up Date', 'Last Follow-Up Outcome', 'Follow-Up Count', 'Last Updated By',
+    'Last Activity Timestamp', 'Lead Remarks', 'Lead Source', 'Lead Created Date', 'Lead Status',
+    'Last Follow-Up Date', 'Last Stage Change Date', 'Lead Assigned Date', 'Previous Counsellor',
+    'Total Activities', 'Data Quality Flags', 'Audit Snapshot (system)']);
 })();
+
+function defaultCustomName_(slot) { return 'Custom Field ' + slot; }
+/** Lead Management column of custom field slot 1-10. */
+function customCol_(slot) { return LC.CUSTOM_FIRST + slot - 1; }
 
 /** Columns whose cells are produced by an ARRAYFORMULA in the header row. */
 var LEAD_FORMULA_COLS = [LC.FU_COUNT, LC.ACTIVITY_TOTAL, LC.DQ_FLAGS];
@@ -73,7 +79,7 @@ var LS = {
   PRIORITY: 1, OUTCOME: 2, SOURCE: 3, STATUS: 4, ACT_TYPE: 5, ACT_CATEGORY: 6, ACT_SIDEBAR: 7,
   ACTIVE_VALUES: 8, BUCKET_LABEL: 10, BUCKET_MIN: 11, BUCKET_MAX: 12, SET_KEY: 14, SET_VALUE: 15,
   SET_DESC: 16, H_ACTIVE_STAGES: 18, H_ALL_STAGES: 19, H_ACTIVE_CNS: 20, H_CNS_FILTER: 21,
-  H_PERIODS: 22, H_PAIRS: 23
+  H_PERIODS: 22, H_PAIRS: 23, CF_SLOT: 26, CF_NAME: 27, CF_ACTIVE: 28
 };
 
 var ACTIVE = 'Active';
@@ -177,6 +183,17 @@ function colLetter_(n) {
   var s = '';
   while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
   return s;
+}
+
+/**
+ * Fills {KEY} placeholders in a formula template with Lead Management column letters from LC,
+ * e.g. lcf_('=${NEXT_FU}2<TODAY()') -> '=$T2<TODAY()'. Keeps formulas in step with column moves.
+ */
+function lcf_(template) {
+  return String(template).replace(/\{([A-Z_]+)\}/g, function (m, key) {
+    if (!LC[key]) throw new Error('Unknown Lead Management column key ' + key);
+    return colLetter_(LC[key]);
+  });
 }
 
 function pad_(num, digits) {
@@ -513,7 +530,7 @@ function requireAdmin_() {
   if (isAdmin_(email)) return email;
   var msg = 'This action is restricted to CRM administrators (Lists & Settings > "' + SET.ADMINS + '").' +
     (email ? '' : ' Your email address is not visible to the script.');
-  alert_(msg);
+  notify_(msg);   // non-blocking: ui.alert would pause the script until someone clicks OK
   throw new Error(msg);
 }
 

@@ -1,7 +1,7 @@
 // Minimal in-memory mock of the Apps Script services used by the Lead CRM.
 // Formulas are stored, not evaluated. Unknown chainable methods are no-ops.
 'use strict';
-const toasts = [], alerts = [], formulas = [], triggers = [];
+const toasts = [], alerts = [], formulas = [], triggers = [], prompts = [], confirms = [];
 let tempKey = 'TK1', activeEmail = 'admin@example.com';
 
 function chain(log) {
@@ -22,7 +22,7 @@ function parseA1(a1) {
 function letter(n) { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
 
 class Sheet {
-  constructor(ss, name) { this.ss = ss; this.name = name; this.maxRows = 1000; this.maxCols = 26; this.v = {}; this.f = {}; this.dv = {}; this.charts = []; this.filter = null; this.prot = []; }
+  constructor(ss, name) { this.ss = ss; this.name = name; this.maxRows = 1000; this.maxCols = 26; this.v = {}; this.f = {}; this.dv = {}; this.charts = []; this.filter = null; this.prot = []; this.hidden = new Set(); }
   key(r, c) { return r + ':' + c; }
   getName() { return this.name; }
   getParent() { return this.ss; }
@@ -54,7 +54,19 @@ class Sheet {
   setConditionalFormatRules(r) { this.cf = r; }
   clearConditionalFormatRules() { this.cf = []; }
   clear() { this.v = {}; this.f = {}; }
-  hideColumns() {} setFrozenRows() {} setFrozenColumns() {} setColumnWidth() {} setRowHeight() {} setTabColor() {} setHiddenGridlines() {}
+  hideColumns(c, n) { for (let i = 0; i < (n || 1); i++) this.hidden.add(c + i); }
+  showColumns(c, n) { for (let i = 0; i < (n || 1); i++) this.hidden.delete(c + i); }
+  isColumnHiddenByUser(c) { return this.hidden.has(c); }
+  moveColumns(range, dest) {
+    // Reorder columns: take [c1..c2] and place them before column `dest` (dest < c1 in our use).
+    const c1 = range.c, n = range.nc, order = [];
+    for (let c = 1; c <= this.maxCols; c++) order.push(c);
+    const moved = order.splice(c1 - 1, n);
+    order.splice(dest - 1, 0, ...moved);            // order[newIndex] = oldColumn
+    const remap = obj => { const out = {}; for (const k in obj) { const [r, c] = k.split(':').map(Number); out[r + ':' + (order.indexOf(c) + 1)] = obj[k]; } return out; };
+    this.v = remap(this.v); this.f = remap(this.f); this.dv = remap(this.dv);
+  }
+  setColumnWidths() {} setFrozenRows() {} setFrozenColumns() {} setColumnWidth() {} setRowHeight() {} setTabColor() {} setHiddenGridlines() {}
   setActiveSelection() {} getActiveCell() { return this.getRange(this.ss.activeRow || 2, 1); }
 }
 class Protection {
@@ -95,6 +107,7 @@ class Range {
   setFormula(f) { formulas.push([this.sh.name + '!' + this.getA1Notation(), f]); this.sh.f[this.sh.key(this.r, this.c)] = f; return this; }
   setFormulas(fs) { if (fs.length !== this.nr) throw new Error('setFormulas dims'); fs.forEach((row, i) => row.forEach((f, j) => { formulas.push([this.sh.name, f]); this.sh.f[this.sh.key(this.r + i, this.c + j)] = f; })); return this; }
   getFormula() { return this.sh.f[this.sh.key(this.r, this.c)] || ''; }
+  getFormulas() { const o = []; for (let i = 0; i < this.nr; i++) { const row = []; for (let j = 0; j < this.nc; j++) row.push(this.sh.f[this.sh.key(this.r + i, this.c + j)] || ''); o.push(row); } return o; }
   clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) { delete this.sh.v[this.sh.key(this.r + i, this.c + j)]; } return this; }
   setDataValidation(rule) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.dv[this.sh.key(this.r + i, this.c + j)] = rule; return this; }
   setDataValidations(rules) { if (rules.length !== this.nr) throw new Error('setDataValidations dims ' + rules.length + ' vs ' + this.nr); rules.forEach((row, i) => row.forEach((rule, j) => { this.sh.dv[this.sh.key(this.r + i, this.c + j)] = rule; })); return this; }
@@ -149,12 +162,12 @@ function fmtDate(d, tz, fmt) {
 
 function makeGlobals(ss) {
   const docProps = {}, scriptProps = {}, cache = {};
-  const props = store => ({ getProperty: k => (k in store ? store[k] : null), setProperty(k, v) { store[k] = String(v); return this; }, deleteProperty(k) { delete store[k]; } });
+  const props = store => ({ getProperty: k => (k in store ? store[k] : null), setProperty(k, v) { store[k] = String(v); return this; }, deleteProperty(k) { delete store[k]; return this; } });
   return {
     console, Date, JSON, Math, Object, Array, String, Number, RegExp, Error, parseInt, parseFloat, isNaN,
     SpreadsheetApp: {
       getActive: () => ss, getActiveSpreadsheet: () => ss, getActiveSheet: () => ss.active, flush() {},
-      getUi: () => ({ alert: (...a) => { alerts.push(a[1] || a[0]); }, ButtonSet: {}, Button: { OK: 'OK' }, createMenu: () => chain(), showSidebar() {}, showModalDialog() {}, prompt: () => ({ getSelectedButton: () => 'OK', getResponseText: () => '' }) }),
+      getUi: () => ({ alert: (...a) => { alerts.push(a[1] || a[0]); return a.length > 2 && a[2] === 'YES_NO' ? (confirms.shift() || 'NO') : 'OK'; }, ButtonSet: { OK: 'OK', YES_NO: 'YES_NO', OK_CANCEL: 'OK_CANCEL' }, Button: { OK: 'OK', YES: 'YES', NO: 'NO' }, createMenu: () => chain(), showSidebar() {}, showModalDialog() {}, showModelessDialog: (h, t) => { alerts.push(h.__msg || t); }, prompt: () => { const t = prompts.length ? prompts.shift() : ''; return { getSelectedButton: () => 'OK', getResponseText: () => t }; } }),
       newDataValidation: () => builder('dv'), newConditionalFormatRule: () => builder('cf'), newFilterCriteria: () => builder('fc'),
       BandingTheme: {}, ProtectionType: { RANGE: 'RANGE', SHEET: 'SHEET' }, Direction: { UP: 'UP' }, BorderStyle: {}, RelativeDate: {}
     },
@@ -170,10 +183,10 @@ function makeGlobals(ss) {
       base64Encode: a => Buffer.from(a.map(x => x & 255)).toString('base64'),
       DigestAlgorithm: { MD5: 'MD5' }, Charset: { UTF_8: 'UTF-8' }
     },
-    HtmlService: { createHtmlOutputFromFile: () => chain(), createHtmlOutput: () => chain() },
+    HtmlService: { createHtmlOutputFromFile: () => chain(), createHtmlOutput: (html) => { const w = new Proxy({}, { get: (t, k) => k === '__msg' ? html : () => w }); return w; } },
     MailApp: { sendEmail() {}, getRemainingDailyQuota: () => 100 },
     _state: { docProps, scriptProps, cache }
   };
 }
 
-module.exports = { Spreadsheet, makeGlobals, toasts, alerts, formulas, triggers, setUser(e, k) { activeEmail = e; tempKey = k; } };
+module.exports = { Spreadsheet, makeGlobals, toasts, alerts, formulas, triggers, prompts, confirms, setUser(e, k) { activeEmail = e; tempKey = k; } };

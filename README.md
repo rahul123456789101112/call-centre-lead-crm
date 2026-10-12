@@ -3,7 +3,7 @@
 A blank, manually maintained lead CRM for call centres and counselling teams, built entirely in Google Sheets with Apps Script. It needs no paid CRM or external API. The requirements are in [PROMPT.md](PROMPT.md).
 
 Running `setupWorkbook()` in a blank Google Sheet builds:
-- **Lead Management**: 10,000 pre-formatted rows, auto Lead IDs, fixed timestamps, dependent stage/substage dropdowns, colour-coded follow-ups and data-quality flags.
+- **Lead Management**: 10,000 pre-formatted rows, 10 optional custom-field slots (hidden until an admin adds a field), auto Lead IDs, fixed timestamps, dependent stage/substage dropdowns, colour-coded follow-ups and data-quality flags.
 - **Follow-Up Log**: an append-only activity history and audit trail (contact activity / record update / system activity).
 - **Stage Master** and **Counsellor Master**: configurable, with sample data you replace.
 - **Dashboard**: 12 KPIs, stage, substage, counsellor, ageing, exception, daily-trend and pending reports, and 6 charts, controlled by a date-range and counsellor filter.
@@ -12,7 +12,7 @@ Running `setupWorkbook()` in a blank Google Sheet builds:
 
 | Folder | Contents |
 |---|---|
-| [`apps-script/`](apps-script) | `Config.gs`, `Setup.gs`, `Triggers.gs`, `FollowUp.gs`, `FollowUpSidebar.html`, `Menu.gs`, `appsscript.json` |
+| [`apps-script/`](apps-script) | `Config.gs`, `Setup.gs`, `Triggers.gs`, `FollowUp.gs`, `FollowUpSidebar.html`, `Menu.gs`, `CustomFields.gs`, `appsscript.json` |
 | [`docs/`](docs) | [SETUP](docs/SETUP.md) · [ADMIN](docs/ADMIN.md) · [TESTING](docs/TESTING.md) · [TROUBLESHOOTING](docs/TROUBLESHOOTING.md) · [LIMITATIONS](docs/LIMITATIONS.md) |
 | [`test/`](test) | Node.js mock of the Sheets services and scenario tests (`node test/run-mock-tests.js apps-script`) |
 

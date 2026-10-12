@@ -55,6 +55,7 @@ function handleEdit_(e) {
     switch (sheet.getName()) {
       case SHEET.LEADS: onLeadSheetEdit_(e, sheet, range); break;
       case SHEET.STAGES: onStageMasterEdit_(e, sheet, range); break;
+      case SHEET.SETTINGS: onCustomFieldTableEdit_(range); break;
       case SHEET.COUNSELLORS: onCounsellorMasterEdit_(e, sheet, range); break;
       case SHEET.LOG: onLogEdit_(e, sheet, range); break;
       case SHEET.DASHBOARD: onDashboardEdit_(e, sheet, range); break;
@@ -75,6 +76,7 @@ function onLeadSheetEdit_(e, sheet, range) {
   var r2 = range.getLastRow();
   var c1 = range.getColumn();
   var c2 = range.getLastColumn();
+  if (range.getRow() === 1 && c2 >= LC.CUSTOM_FIRST && c1 <= LC.CUSTOM_LAST) onCustomHeaderEdit_(sheet, range);
   if (r2 < 2 || c1 > LEAD_COLS) return;
   var n = r2 - r1 + 1;
 
