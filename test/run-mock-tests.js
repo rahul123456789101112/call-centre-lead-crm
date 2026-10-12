@@ -5,8 +5,8 @@ const fs = require('fs'), vm = require('vm'), path = require('path');
 const M = require('./mock.js');
 const dir = process.argv[2];
 const ss = new M.Spreadsheet();
-const g = makeCtx();
-function makeCtx() { const c = M.makeGlobals(ss); vm.createContext(c); for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.gs'))) vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), c, { filename: f }); return c; }
+const g = makeCtx(ss);
+function makeCtx(book) { const c = M.makeGlobals(book); vm.createContext(c); for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.gs'))) vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), c, { filename: f }); return c; }
 let fails = 0;
 function ok(cond, msg) { console.log((cond ? 'PASS ' : 'FAIL ') + msg); if (!cond) fails++; }
 function fresh() { vm.runInContext('clearMemo_()', g); }
@@ -19,8 +19,23 @@ function edit(sheetName, a1, value, oldValue) {
 }
 function logRows() { const l = LOG(); const n = l.getLastRow(); return n < 2 ? [] : l.getRange(2, 1, n - 1, 18).getValues(); }
 
-// ---------- setup ----------
-g.setupWorkbook();
+// ---------- quick-test setup (1,000 rows) on a separate workbook ----------
+{
+  const ss2 = new M.Spreadsheet(); const g2 = makeCtx(ss2);
+  g2.setupWorkbookQuickTest();
+  ok(ss2.getSheetByName('Lead Management').getMaxRows() === 1001, 'quick test builds 1,000 lead rows');
+  ok(!g2._state.docProps.SETUP_STATE && g2._state.docProps.SETUP_ROWS === '1000', 'quick test completes in one run');
+}
+
+// ---------- resumable setup: budget forces one stage per run ----------
+vm.runInContext('SETUP_BUDGET_MS = 1', g);
+let runs = 0;
+do { g.setupWorkbook(); runs++; } while (g._state.docProps.SETUP_STATE && runs < 20);
+ok(runs === 10, 'setup resumed across ' + runs + ' runs (10 stages)');
+ok(M.alerts.filter(a => /NOT finished/.test(a)).length === 9 && /continue from stage 2/.test(M.alerts.find(a => /NOT finished/.test(a))), 'each partial run says to run again');
+ok(/created with 10[,.]?000 lead rows/.test(M.alerts[M.alerts.length - 1]), 'final run reports completion');
+vm.runInContext('SETUP_BUDGET_MS = 270000', g);
+ok(LM().getRange('G5').getDataValidation() === null, 'no substage rules on empty rows after setup');
 ok(['Lead Management', 'Follow-Up Log', 'Stage Master', 'Counsellor Master', 'Dashboard', 'Lists & Settings'].every(n => ss.getSheetByName(n)), 'all 6 sheets created');
 ok(!ss.getSheetByName('Sheet1'), 'default Sheet1 removed');
 ok(LM().getMaxRows() >= 10001, 'Lead Management sized for 10,000 leads');
@@ -90,6 +105,7 @@ ok(cell(LM(), 'A3') !== 'LD-000001' && /^LD-\d{6}$/.test(cell(LM(), 'A3')), 'dup
 ok(cell(LM(), 'A5') === 'LEGACY-9', 'unique imported ID kept');
 ok(cell(LM(), 'AA5') instanceof Date && cell(LM(), 'AB5') === 'Open' && logRows().some(r => r[1] === 'LEGACY-9' && r[5] === 'Lead Created'), 'imported lead initialised + logged');
 ok(M.toasts.some(t => /mobile number 9876543210 is also used/.test(t)), 'duplicate mobile warning toast');
+ok(!/COUNTIF\(C2:C,C2:C\)/.test(LM().getRange('AH1').getFormula()), 'no quadratic duplicate COUNTIF in AH1');
 const ids = [2, 3, 4, 5].map(r => cell(LM(), 'A' + r));
 ok(new Set(ids).size === 4, 'all IDs unique: ' + ids.join(','));
 

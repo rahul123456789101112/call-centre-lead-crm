@@ -3,7 +3,7 @@
 These step-by-step checks cover every scenario in section 13 of `PROMPT.md`. Run them in a **copy** of the CRM (**File → Make a copy**), or before go-live, then delete the test data (see ADMIN.md → *Resetting IDs before go-live*).
 
 **Preparation**
-1. Complete [SETUP.md](SETUP.md) §1–§2.
+1. Complete [SETUP.md](SETUP.md) §1–§2. `setupWorkbookQuickTest` (1,000 rows) is enough for these tests.
 2. In Counsellor Master, set the email of *Sample Counsellor 1* to **your** Google account email.
 3. Have a second Google account ready for test 15 (multi-user), and add its email to *Sample Counsellor 2*.
 4. Run **Lead CRM → Identify me**. It should say you are recognised as "Sample Counsellor 1".
@@ -187,7 +187,7 @@ Set its Active Status to `Inactive`. It disappears from new selections. A lead a
 
 | Check | Steps | Expected |
 |---|---|---|
-| Duplicate mobile (warn) | Enter `9876543210` on a new lead | Toast "also used by LD-000001"; C cell orange; AH "Duplicate mobile" |
+| Duplicate mobile (warn) | Enter `9876543210` on a new lead | Toast "also used by LD-000001"; both C cells orange |
 | Duplicate mobile (block) | Set *Duplicate Mobile Check* = Block, repeat | Value cleared, toast "Blocked" |
 | Invalid mobile | Enter `12ab` | Warning triangle; AH "Invalid mobile format" (still allowed) |
 | Lead ID protection | Type over A2 | Warning dialog; value restored |
@@ -201,7 +201,7 @@ Set its Active Status to `Inactive`. It disappears from new selections. A lead a
 
 ## Automated pre-release check (developers)
 
-[`test/`](../test) contains an in-memory mock of the Sheets services and a scenario script. It runs `setupWorkbook()`, simulates edits, pastes, sorting, sidebar submissions, Stage/Counsellor Master changes and log tampering, and asserts the results. It also checks that every formula the script writes has balanced parentheses, braces and quotes.
+[`test/`](../test) contains an in-memory mock of the Sheets services and a scenario script. It runs `setupWorkbookQuickTest()` and a staged `setupWorkbook()` (forced to stop after every stage, to prove it resumes), simulates edits, pastes, sorting, sidebar submissions, Stage/Counsellor Master changes and log tampering, and asserts the results. It also checks that every formula the script writes has balanced parentheses, braces and quotes.
 
 ```
 node test/run-mock-tests.js apps-script

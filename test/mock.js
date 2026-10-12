@@ -54,7 +54,7 @@ class Sheet {
   setConditionalFormatRules(r) { this.cf = r; }
   clearConditionalFormatRules() { this.cf = []; }
   clear() { this.v = {}; this.f = {}; }
-  hideColumns() {} setFrozenRows() {} setFrozenColumns() {} setColumnWidth() {} setRowHeight() {} setTabColor() {} setHiddenGridlines() {}
+  hideColumns() {} setColumnWidths() {} setFrozenRows() {} setFrozenColumns() {} setColumnWidth() {} setRowHeight() {} setTabColor() {} setHiddenGridlines() {}
   setActiveSelection() {} getActiveCell() { return this.getRange(this.ss.activeRow || 2, 1); }
 }
 class Protection {
@@ -95,6 +95,7 @@ class Range {
   setFormula(f) { formulas.push([this.sh.name + '!' + this.getA1Notation(), f]); this.sh.f[this.sh.key(this.r, this.c)] = f; return this; }
   setFormulas(fs) { if (fs.length !== this.nr) throw new Error('setFormulas dims'); fs.forEach((row, i) => row.forEach((f, j) => { formulas.push([this.sh.name, f]); this.sh.f[this.sh.key(this.r + i, this.c + j)] = f; })); return this; }
   getFormula() { return this.sh.f[this.sh.key(this.r, this.c)] || ''; }
+  getFormulas() { const o = []; for (let i = 0; i < this.nr; i++) { const row = []; for (let j = 0; j < this.nc; j++) row.push(this.sh.f[this.sh.key(this.r + i, this.c + j)] || ''); o.push(row); } return o; }
   clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) { delete this.sh.v[this.sh.key(this.r + i, this.c + j)]; } return this; }
   setDataValidation(rule) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.dv[this.sh.key(this.r + i, this.c + j)] = rule; return this; }
   setDataValidations(rules) { if (rules.length !== this.nr) throw new Error('setDataValidations dims ' + rules.length + ' vs ' + this.nr); rules.forEach((row, i) => row.forEach((rule, j) => { this.sh.dv[this.sh.key(this.r + i, this.c + j)] = rule; })); return this; }
@@ -149,12 +150,12 @@ function fmtDate(d, tz, fmt) {
 
 function makeGlobals(ss) {
   const docProps = {}, scriptProps = {}, cache = {};
-  const props = store => ({ getProperty: k => (k in store ? store[k] : null), setProperty(k, v) { store[k] = String(v); return this; }, deleteProperty(k) { delete store[k]; } });
+  const props = store => ({ getProperty: k => (k in store ? store[k] : null), setProperty(k, v) { store[k] = String(v); return this; }, deleteProperty(k) { delete store[k]; return this; } });
   return {
     console, Date, JSON, Math, Object, Array, String, Number, RegExp, Error, parseInt, parseFloat, isNaN,
     SpreadsheetApp: {
       getActive: () => ss, getActiveSpreadsheet: () => ss, getActiveSheet: () => ss.active, flush() {},
-      getUi: () => ({ alert: (...a) => { alerts.push(a[1] || a[0]); }, ButtonSet: {}, Button: { OK: 'OK' }, createMenu: () => chain(), showSidebar() {}, showModalDialog() {}, prompt: () => ({ getSelectedButton: () => 'OK', getResponseText: () => '' }) }),
+      getUi: () => ({ alert: (...a) => { alerts.push(a[1] || a[0]); }, ButtonSet: {}, Button: { OK: 'OK' }, createMenu: () => chain(), showSidebar() {}, showModalDialog() {}, showModelessDialog: (h, t) => { alerts.push(h.__msg || t); }, prompt: () => ({ getSelectedButton: () => 'OK', getResponseText: () => '' }) }),
       newDataValidation: () => builder('dv'), newConditionalFormatRule: () => builder('cf'), newFilterCriteria: () => builder('fc'),
       BandingTheme: {}, ProtectionType: { RANGE: 'RANGE', SHEET: 'SHEET' }, Direction: { UP: 'UP' }, BorderStyle: {}, RelativeDate: {}
     },
@@ -170,7 +171,7 @@ function makeGlobals(ss) {
       base64Encode: a => Buffer.from(a.map(x => x & 255)).toString('base64'),
       DigestAlgorithm: { MD5: 'MD5' }, Charset: { UTF_8: 'UTF-8' }
     },
-    HtmlService: { createHtmlOutputFromFile: () => chain(), createHtmlOutput: () => chain() },
+    HtmlService: { createHtmlOutputFromFile: () => chain(), createHtmlOutput: (html) => { const w = new Proxy({}, { get: (t, k) => k === '__msg' ? html : () => w }); return w; } },
     MailApp: { sendEmail() {}, getRemainingDailyQuota: () => 100 },
     _state: { docProps, scriptProps, cache }
   };

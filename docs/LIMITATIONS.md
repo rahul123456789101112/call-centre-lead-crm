@@ -43,15 +43,19 @@ This CRM is built only on Google Sheets and Apps Script. These are the trade-off
     - Activity metrics use the counsellor recorded on the activity, which is chosen in the form.
     - Lead metrics use the *current* Assigned Counsellor.
     - Historical names are kept as text, so renaming a counsellor splits their history; add a new counsellor row instead.
-15. The duplicate mobile/email flags use `COUNTIF` across the column. With 10,000+ leads this adds recalculation time; set the check to `Off` if not needed. Numbers stored with a leading `+` may not be matched by `COUNTIF`. The script's own entry-time check (exact text match) still works.
-16. Reports are formula-based (FILTER/COUNTIFS/QUERY) and not pivot tables. Admins can add pivot tables on extra sheets. Google Sheets' practical limit (10 million cells, recalculation speed) means very large logs (over ~200k activities) will slow the dashboard. Archive old log rows to another file yearly if needed.
+15. **Duplicate mobile/email highlighting** is conditional formatting (`COUNTIF` per visible cell), not a column formula, so it adds no whole-sheet recalculation. As a result:
+    - duplicates are not listed in Data Quality Flags and cannot be filtered by text;
+    - numbers stored with a leading `+` may not be matched by `COUNTIF`.
+    The script's entry-time check (exact text match, with toast) still works.
+16. **Setup must be run with *Run*, not *Debug*, and may need more than one run** on slow sheets. Progress is kept per stage (see SETUP.md). A single stage that alone takes more than 6 minutes cannot be resumed part-way; that has not been observed but cannot be ruled out without a real test.
+17. Reports are formula-based (FILTER/COUNTIFS/QUERY) and not pivot tables. Admins can add pivot tables on extra sheets. Google Sheets' practical limit (10 million cells, recalculation speed) means very large logs (over ~200k activities) will slow the dashboard. Archive old log rows to another file yearly if needed.
 
 ## Data entry
-17. **Lead Status values** `Converted`, `Lost`, `Duplicate` are fixed words used by reports and colours. Other lists are fully configurable.
-18. **Columns must not be inserted, deleted or reordered** in Lead Management (A–AI) or Follow-Up Log (A–R). Headers can be renamed.
-19. **Lead IDs are unique and stable but not gap-free:** rejected or concurrent attempts can skip numbers.
-20. **Activity backdating** in the form is limited by *Max Backdate Days*. Activities typed directly into the log are not supported (they are recorded as tampering).
-21. **Email reminders** depend on Google's daily MailApp quota (about 100 recipients/day for consumer accounts, about 1,500 for Workspace).
+18. **Lead Status values** `Converted`, `Lost`, `Duplicate` are fixed words used by reports and colours. Other lists are fully configurable.
+19. **Columns must not be inserted, deleted or reordered** in Lead Management (A–AI) or Follow-Up Log (A–R). Headers can be renamed.
+20. **Lead IDs are unique and stable but not gap-free:** rejected or concurrent attempts can skip numbers.
+21. **Activity backdating** in the form is limited by *Max Backdate Days*. Activities typed directly into the log are not supported (they are recorded as tampering).
+22. **Email reminders** depend on Google's daily MailApp quota (about 100 recipients/day for consumer accounts, about 1,500 for Workspace).
 
 ## What was verified, and how
 The code was written without access to a live Google Sheets environment.

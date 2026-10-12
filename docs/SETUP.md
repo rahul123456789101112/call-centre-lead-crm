@@ -27,11 +27,40 @@ This builds the complete Call Centre Lead CRM inside a **blank Google Sheet** us
    This limits the script to *the current spreadsheet only* and to the five scopes listed in §3.
    Change `"timeZone"` to match step 2 if you are not in India.
 6. Save (Ctrl/Cmd + S).
-7. In the function dropdown at the top of the editor, choose **`setupWorkbook`** and click **Run**.
-8. Authorise when prompted (see §2). Setup takes about 1–2 minutes. It shows progress as toasts in the spreadsheet tab, then a "Lead CRM created" message.
-9. Go back to the spreadsheet and **reload the page**. A **Lead CRM** menu appears after a few seconds.
+7. In the function dropdown at the top of the editor, choose **`setupWorkbook`** and click **Run**. Use **Run**, not **Debug**: the debugger is much slower and can hit the time limit.
+   - To try the CRM quickly first, choose **`setupWorkbookQuickTest`** instead. It builds the same workbook with **1,000** lead rows instead of 10,000. You can grow it later with *Admin → Extend Lead Management by 5,000 rows*, or by running `setupWorkbook`.
+8. Authorise when prompted (see §2).
+9. Keep the spreadsheet tab open. Each stage shows a toast there ("Stage 3 of 10: …"), and the execution log in the editor records how long each stage took.
+10. **If the message says "Setup is NOT finished yet", run `setupWorkbook` again.** See *Setup runs in stages* below.
+11. When the message says **"Lead CRM created"**, go back to the spreadsheet and **reload the page**. A **Lead CRM** menu appears after a few seconds.
 
-> Re-running `setupWorkbook` (or **Lead CRM → Admin → Set up / repair workbook**) is safe. It keeps every lead, log entry, master row, setting and renamed custom field, and rebuilds formatting, validation, protections and the Dashboard.
+### Setup runs in stages
+
+Apps Script stops any run after 6 minutes, so setup is split into 10 stages:
+
+1. Create sheets
+2. Lists & Settings
+3. Stage Master & Counsellor Master
+4. Lead Management layout
+5. Lead Management validation & colours
+6. Follow-Up Log
+7. Lead Management formulas
+8. Dashboard reports
+9. Dashboard charts
+10. Protections & triggers
+
+How a run proceeds:
+- Progress is saved in the document's properties after each stage.
+- A run will not start a stage it expects to push it past about 4.5 minutes. It stops cleanly and shows *"Setup is NOT finished yet: completed N of 10 stages… run it again to continue from stage N+1"*.
+- Running `setupWorkbook` again continues from the next stage; finished stages are not repeated.
+- Each stage is safe to repeat. If a run is killed mid-stage (for example by the 6-minute limit), the next run simply redoes that stage.
+- On a typical sheet setup finishes in one or two runs.
+- **Lead CRM → Admin → Restart setup from the first stage** forgets the saved progress. Your data is not touched.
+- **Lead CRM → Admin → Run health check** shows "Setup unfinished" while stages remain.
+
+Setup messages appear in a small dialog that does **not** pause the script. (An "OK"-style alert would make the script wait until someone clicked it in the spreadsheet tab.)
+
+> Re-running `setupWorkbook` (or **Lead CRM → Admin → Set up / repair workbook**) after setup has finished is a safe repair. It keeps every lead, log entry, master row, setting and renamed custom field, and rebuilds formatting, validation, protections and the Dashboard.
 
 ## 2. Authorisation
 
@@ -136,7 +165,7 @@ A–AB are exactly as specified. AC–AI are additional tracking columns.
 | AE | Lead Assigned Date | System | Fixed timestamp of latest (re)assignment |
 | AF | Previous Counsellor | System | Owner before the latest reassignment |
 | AG | Total Activities | Formula | Contact + Record Update entries |
-| AH | Data Quality Flags | Formula | Missing/invalid/duplicate contact, unassigned, stage problems, overdue, missing follow-up date |
+| AH | Data Quality Flags | Formula | Missing/invalid contact, unassigned, stage problems, overdue, missing follow-up date. Duplicates are shown by colour in C/D. |
 | AI | Audit Snapshot | System (hidden) | JSON of owner/stage/substage/status/next FU used to detect changes, including bulk pastes |
 
 **Header colours:** navy = caller fields, grey = system, green = formula, purple = custom fields.
@@ -152,7 +181,7 @@ A–AB are exactly as specified. AC–AI are additional tracking columns.
 | Light blue J | Follow-up due within *Upcoming Follow-Up Window* days |
 | Dark red H | Critical priority |
 | Orange H | Hot priority |
-| Orange C/D | Duplicate mobile/email |
+| Orange C/D | Duplicate mobile/email (conditional formatting; follows the Duplicate Mobile/Email Check setting) |
 | Red A | Duplicate Lead ID |
 
 Alternating row banding, a frozen header (and frozen ID + Name columns) and a filter are enabled.
@@ -180,7 +209,9 @@ The category is stored on each row when it is written, so later changes to the a
   - **When the stage changes** (typing, paste, or the form): that row's rule is rebuilt immediately. If the existing substage no longer belongs to the new stage, it is **cleared**. A `Substage Cleared` System entry records the old value, and the user sees a message.
   - **When Stage Master is edited:** all rows' rules are rebuilt in one batch call (a few seconds for 10,000 rows).
   - **After sorting / inserting / deleting rows:** the installable onChange trigger rebuilds them (throttled to once per 30 seconds). **Lead CRM → Refresh substage dropdowns** does the same on demand.
-  - **Rows without a stage**, or a stage with no substages, get a warning rule ("Select a Lead Stage first") instead of a list. Pasting still works and the script validates the result.
+  - **Empty rows have no substage rule at all.** Setup does not create 10,000 per-row rules. A row gets its dropdown when a stage is first chosen in it (by typing, pasting, defaulting for a new lead, or through the follow-up form).
+  - **A stage with no substages** gets a warning rule ("Stage … has no active substages") instead of a list. Pasting still works and the script validates the result.
+  - **A substage typed into a row with no stage** is cleared by the script.
   - **Safety net:** every substage change is checked against Stage Master. The Data Quality Flags column shows "Substage not valid for stage" for anything that slipped through, such as a substage later deactivated by an admin.
 
 Why not formulas or named ranges? A per-stage named-range layout breaks or shifts when stages are added, reordered or renamed. Rules generated from Stage Master avoid that and never list every substage for every stage.
@@ -243,4 +274,4 @@ These are off by default. An admin can choose **Lead CRM → Admin → Enable da
 
 ## 10. Updating the code later
 
-Paste the new file contents into the same Apps Script files. Then run **Lead CRM → Admin → Set up / repair workbook**. Your data is kept.
+Paste the new file contents into the same Apps Script files. Then run **Lead CRM → Admin → Set up / repair workbook**, again if it says it is not finished. Your data is kept.

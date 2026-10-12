@@ -513,7 +513,7 @@ function requireAdmin_() {
   if (isAdmin_(email)) return email;
   var msg = 'This action is restricted to CRM administrators (Lists & Settings > "' + SET.ADMINS + '").' +
     (email ? '' : ' Your email address is not visible to the script.');
-  alert_(msg);
+  notify_(msg);   // non-blocking: ui.alert would pause the script until someone clicks OK
   throw new Error(msg);
 }
 
