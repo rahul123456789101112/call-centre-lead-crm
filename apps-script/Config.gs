@@ -826,7 +826,16 @@ function editableCols_() {
       EDITABLE_CANDIDATE_COLS.forEach(function (c) { if (same_(LEAD_HEADERS[c - 1], n)) cols.push(c); });
       custom.forEach(function (f) { if (f.active && same_(f.name, n)) cols.push(customCol_(f.slot)); });
     });
-    return cols.filter(function (c, i) { return cols.indexOf(c) === i; }).sort(function (a, b) { return a - b; });
+    cols = cols.filter(function (c, i) { return cols.indexOf(c) === i; }).sort(function (a, b) { return a - b; });
+    if (!cols.length) {
+      // An empty or unreadable list would lock counsellors out completely: use the defaults instead.
+      console.warn('Counsellor-Editable Fields gave no usable column (' + names.join(', ') + '); using the defaults.');
+      DEFAULT_EDITABLE_FIELDS.forEach(function (n) {
+        EDITABLE_CANDIDATE_COLS.forEach(function (c) { if (same_(LEAD_HEADERS[c - 1], n)) cols.push(c); });
+      });
+      cols.sort(function (a, b) { return a - b; });
+    }
+    return cols;
   });
 }
 

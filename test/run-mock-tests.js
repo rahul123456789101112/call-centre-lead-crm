@@ -94,6 +94,14 @@ for (const [where, f] of M.formulas) {
 }
 ok(bad === 0, 'all ' + M.formulas.length + ' written formulas are balanced');
 
+{
+  // An empty Counsellor-Editable Fields list must not break setup (real-sheet report: "Ranges must have at least one range").
+  const saved = LS_().getRange('AE2:AE20').getValues();
+  LS_().getRange('AE2:AE20').setValues(saved.map(() => ['']));
+  fresh(); let err = null; try { vm.runInContext("applyLeadSheetRules_(getSheet_(SHEET.LEADS))", g); } catch (e) { err = e.message; }
+  ok(!err && vm.runInContext('editableCols_().length', g) === 7, 'empty editable list: setup still works and falls back to the defaults ' + (err || ''));
+  LS_().getRange('AE2:AE20').setValues(saved); fresh(); vm.runInContext("applyLeadSheetRules_(getSheet_(SHEET.LEADS))", g);
+}
 section('Custom fields');
 as('admin@example.com', 'TKA');
 ok([5, 6, 7, 8, 9, 10, 11, 12, 13, 14].every(c => LM().isColumnHiddenByUser(c)), 'all 10 custom slots hidden after setup');

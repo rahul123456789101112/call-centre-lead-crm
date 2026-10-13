@@ -811,6 +811,7 @@ function applyLeadSheetRules_(sh) {
 
   // Conditional formatting: earlier rules win.
   var cf = function (formula, ranges, bg, font, bold, extra) {
+    if (!ranges || !ranges.length) return null;   // Google refuses a rule without ranges
     var b = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied(formula).setRanges(ranges);
     if (bg) b.setBackground(bg);
     if (font) b.setFontColor(font);
