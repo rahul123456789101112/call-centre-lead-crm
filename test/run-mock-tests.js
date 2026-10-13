@@ -100,6 +100,8 @@ ok(bad === 0, 'all ' + M.formulas.length + ' written formulas are balanced');
   LS_().getRange('AE2:AE20').setValues(saved.map(() => ['']));
   fresh(); let err = null; try { vm.runInContext("applyLeadSheetRules_(getSheet_(SHEET.LEADS))", g); } catch (e) { err = e.message; }
   ok(!err && vm.runInContext('editableCols_().length', g) === 7, 'empty editable list: setup still works and falls back to the defaults ' + (err || ''));
+  fresh(); vm.runInContext("setupEditableFieldList_(getSheet_(SHEET.SETTINGS))", g);
+  ok(LS_().getRange('AE2').getValue() === 'Lead Stage' && LS_().getRange('AE9').getValue() === 'All Custom Fields', 'setup / repair writes the default list back into an empty column AE');
   LS_().getRange('AE2:AE20').setValues(saved); fresh(); vm.runInContext("applyLeadSheetRules_(getSheet_(SHEET.LEADS))", g);
 }
 section('Custom fields');
