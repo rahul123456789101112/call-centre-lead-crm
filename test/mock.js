@@ -159,7 +159,14 @@ class Spreadsheet {
 
 function builder(kind) {
   const calls = [];
-  const p = new Proxy({}, { get(t, k) { if (k === 'build') return () => ({ kind, calls }); return (...a) => { calls.push([k, a]); return p; }; } });
+  const p = new Proxy({}, { get(t, k) {
+    if (k === 'build') return () => {
+      // Like Google: a conditional-format rule must have at least one range.
+      if (kind === 'cf' && calls.some(c => c[0] === 'setRanges' && (!c[1][0] || !c[1][0].length))) throw new Error('Exception: Ranges must have at least one range.');
+      return { kind, calls };
+    };
+    return (...a) => { calls.push([k, a]); return p; };
+  } });
   return p;
 }
 

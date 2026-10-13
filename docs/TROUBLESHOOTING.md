@@ -11,6 +11,7 @@ Start with **Lead CRM → Admin → Run health check**. Errors of triggers are l
 | `Specified permissions are not sufficient` | Manifest changed | Restore `appsscript.json` from the repo, run `setupWorkbook` |
 | "Only CRM administrators can do this." | Your email is not in *Admin Emails* | Ask the owner to add it, then *Reapply protections* |
 | "Setup is NOT finished yet" / "Exceeded maximum execution time" | 6-minute limit | Run `setupWorkbook` again with **Run** (not Debug); progress is kept per stage. To test fast use `setupWorkbookQuickTest` |
+| Setup stops at stage 5 with "Exception: Ranges must have at least one range." | Version 2.0.0 bug: the Counsellor-Editable Fields list (Lists & Settings, column AE) gave no usable column, and an empty colour rule was refused by Google | Fixed: re-paste `Config.gs` and `Setup.gs`, run `setupWorkbook` again (it continues at stage 5). Then check column AE: the CRM now falls back to the default list when AE is empty or unreadable |
 | Setup repeats the same stage | That stage alone takes over 6 minutes | *Admin → Restart setup from the first stage*, close other tabs, try the quick test, report the slow stage from the execution log |
 | `Sheet "…" is missing` | A CRM sheet was renamed or deleted | Rename it back, or run *Set up / repair workbook* |
 | I cannot find Lead Entry / Stage Master / Lists & Settings | Admin sheets are hidden | *Lead CRM → Admin → Show admin sheets* |
