@@ -436,7 +436,8 @@ function setupEditableFieldList_(sh) {
     old.clearNote();
   }
   var head = sh.getRange(1, LS.EDITABLE);
-  if (!same_(head.getValue(), EDITABLE_HEADER)) {
+  var listEmpty = !sh.getRange(2, LS.EDITABLE, Math.max(sh.getMaxRows() - 1, 1), 1).getValues().some(function (r) { return str_(r[0]) !== ''; });
+  if (!same_(head.getValue(), EDITABLE_HEADER) || listEmpty) {   // missing or emptied list: write the defaults
     head.setValue(EDITABLE_HEADER);
     sh.getRange(2, LS.EDITABLE, sh.getMaxRows() - 1, 1).clearContent();
     writeList_(sh, LS.EDITABLE, DEFAULT_EDITABLE_FIELDS);
